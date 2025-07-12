@@ -7,19 +7,18 @@ on:
 
 jobs:
   sync-upstream:
-    name: Sync upstream to local upstream branch
+    name: Sync upstream into local upstream branch
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - name: Checkout empty workspace
-        run: git init .
-
-      - name: Set up Git and fetch upstream
+      - name: Initialize clean git repo
         run: |
+          git init
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
+          git remote add origin https://github.com/${{ github.repository }}.git
           git remote add upstream https://github.com/yquake2/yquake2.git
           git fetch upstream --tags
 
@@ -28,23 +27,16 @@ jobs:
           git checkout -B upstream upstream/master
           rm -rf .github/workflows
           git add -u
-          git commit -m "Strip upstream workflows from upstream branch" || true
+          git commit -m "Strip upstream workflows" || true
           git push origin upstream --force
 
-      - name: Clean and push tags (strip workflows)
+      - name: Sync cleaned tags
         run: |
-          mkdir tmp
           for tag in $(git tag -l 'QUAKE2_*'); do
             git checkout -f $tag
             rm -rf .github/workflows
             git add -u
-            git commit -m "Strip workflows from tag $tag" || true
-            new_branch="tagfix-$tag"
-            git checkout -b $new_branch
+            git commit -m "Strip workflows from $tag" || true
             git tag -f $tag
-            git push origin $new_branch --force
-            git push origin :refs/tags/$tag || true
-            git tag -d $tag
-            git tag $tag
-            git push origin $tag
+            git push origin $tag --force
           done
