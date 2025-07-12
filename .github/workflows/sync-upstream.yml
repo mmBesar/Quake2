@@ -13,29 +13,38 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout target repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - name: Checkout empty workspace
+        run: git init .
 
-      - name: Add upstream remote and fetch
+      - name: Set up Git and fetch upstream
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git remote add upstream https://github.com/yquake2/yquake2.git
           git fetch upstream --tags
 
-      - name: Create upstream branch from upstream/master
+      - name: Reset upstream branch (strip workflows)
         run: |
           git checkout -B upstream upstream/master
-          # Remove upstream workflow files to avoid permission issues
           rm -rf .github/workflows
           git add -u
-          git commit -m "Strip upstream workflows to allow push" || true
+          git commit -m "Strip upstream workflows from upstream branch" || true
           git push origin upstream --force
 
-      - name: Sync tags
+      - name: Clean and push tags (strip workflows)
         run: |
-          git tag -l | xargs git tag -d || true
-          git fetch upstream --tags
-          git push origin --tags --force
+          mkdir tmp
+          for tag in $(git tag -l 'QUAKE2_*'); do
+            git checkout -f $tag
+            rm -rf .github/workflows
+            git add -u
+            git commit -m "Strip workflows from tag $tag" || true
+            new_branch="tagfix-$tag"
+            git checkout -b $new_branch
+            git tag -f $tag
+            git push origin $new_branch --force
+            git push origin :refs/tags/$tag || true
+            git tag -d $tag
+            git tag $tag
+            git push origin $tag
+          done
