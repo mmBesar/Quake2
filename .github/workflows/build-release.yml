@@ -12,7 +12,7 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  build-release:
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -44,29 +44,89 @@ jobs:
       - name: Checkout tag
         run: git checkout ${{ steps.get_tag.outputs.tag_name }}
 
-      - name: Build yquake2
+      - name: Build yquake2 (Release)
         run: |
           mkdir build && cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release
           make -j$(nproc)
 
-      - name: Prepare release directory
+      - name: Prepare Quake2 directory (Release)
         run: |
-          mkdir -p release/baseq2 release
-          cp build/release/quake2 release/
-          cp build/release/q2ded release/
-          cp build/release/baseq2/game.so release/baseq2/ || true
-          cp build/release/ref_*.so release/ || true
+          mkdir -p Quake2/baseq2
+          cp build/release/quake2 Quake2/
+          cp build/release/q2ded Quake2/
+          cp build/release/baseq2/game.so Quake2/baseq2/ || true
+          cp build/release/ref_*.so Quake2/ || true
 
-      - name: Zip release
+      - name: Zip release (Release)
         run: |
-          zip -r quake2-${{ matrix.suffix }}-${{ steps.get_tag.outputs.tag_name }}.zip release
+          zip -r quake2-${{ matrix.suffix }}-${{ steps.get_tag.outputs.tag_name }}.zip Quake2
 
-      - name: Create GitHub Release
+      - name: Upload release (Release)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.get_tag.outputs.tag_name }}
           name: ${{ steps.get_tag.outputs.tag_name }}
           files: quake2-${{ matrix.suffix }}-${{ steps.get_tag.outputs.tag_name }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-debug:
+    runs-on: ${{ matrix.runner }}
+    needs: build-release
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+            suffix: linux-amd64
+          - arch: aarch64
+            runner: ubuntu-latest
+            suffix: linux-arm64
+
+    steps:
+      - name: Checkout upstream branch
+        uses: actions/checkout@v4
+        with:
+          ref: upstream
+          fetch-depth: 0
+
+      - name: Set environment tag
+        id: get_tag
+        run: |
+          latest_tag=$(git tag --sort=-creatordate | grep QUAKE2_ | head -n 1)
+          echo "Latest tag: $latest_tag"
+          echo "tag_name=$latest_tag" >> $GITHUB_OUTPUT
+
+      - name: Install dependencies
+        run: sudo apt update && sudo apt install -y cmake libsdl2-dev libopenal-dev libgl1-mesa-dev libcurl4-openssl-dev
+
+      - name: Checkout tag
+        run: git checkout ${{ steps.get_tag.outputs.tag_name }}
+
+      - name: Build yquake2 (Debug)
+        run: |
+          mkdir build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          make -j$(nproc)
+
+      - name: Prepare Quake2 directory (Debug)
+        run: |
+          mkdir -p Quake2/baseq2
+          cp build/release/quake2 Quake2/
+          cp build/release/q2ded Quake2/
+          cp build/release/baseq2/game.so Quake2/baseq2/ || true
+          cp build/release/ref_*.so Quake2/ || true
+
+      - name: Zip release (Debug)
+        run: |
+          zip -r quake2-${{ matrix.suffix }}-${{ steps.get_tag.outputs.tag_name }}-debug.zip Quake2
+
+      - name: Upload release (Debug)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.get_tag.outputs.tag_name }}
+          name: ${{ steps.get_tag.outputs.tag_name }}
+          files: quake2-${{ matrix.suffix }}-${{ steps.get_tag.outputs.tag_name }}-debug.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
