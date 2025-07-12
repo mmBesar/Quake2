@@ -25,13 +25,21 @@ jobs:
           git remote add upstream https://github.com/yquake2/yquake2.git
           git fetch upstream --tags
 
-      - name: Sync master to upstream branch
+      - name: Reset upstream branch and remove workflows
         run: |
           git checkout -B upstream upstream/master
+          rm -rf .github/workflows
+          git add -u
+          git commit -m "Strip workflows from upstream" || true
           git push origin upstream --force
 
-      - name: Sync tags
+      - name: Sync tags (stripped version)
         run: |
-          git tag -l | xargs git tag -d || true
-          git fetch upstream --tags
-          git push origin --tags --force
+          for tag in $(git tag -l 'QUAKE2_*'); do
+            git checkout -f $tag
+            rm -rf .github/workflows
+            git add -u
+            git commit -m "Strip workflows from $tag" || true
+            git tag -f $tag
+            git push origin $tag --force
+          done
