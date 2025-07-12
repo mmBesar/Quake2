@@ -25,9 +25,13 @@ jobs:
           git remote add upstream https://github.com/yquake2/yquake2.git
           git fetch upstream --tags
 
-      - name: Sync master to upstream branch
+      - name: Create upstream branch from upstream/master
         run: |
           git checkout -B upstream upstream/master
+          # Remove upstream workflow files to avoid permission issues
+          rm -rf .github/workflows
+          git add -u
+          git commit -m "Strip upstream workflows to allow push" || true
           git push origin upstream --force
 
       - name: Sync tags
