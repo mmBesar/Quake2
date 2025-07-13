@@ -66,7 +66,7 @@ jobs:
 
       - name: Build RELEASE & zip
         run: |
-          make clean
+          git clean -fdx
           make BUILD=release \
                ARCH=${{ matrix.make_arch }} \
                CC=${{ matrix.triple }}-gcc \
@@ -78,7 +78,7 @@ jobs:
 
       - name: Build DEBUG & zip
         run: |
-          make clean
+          git clean -fdx
           make BUILD=debug \
                ARCH=${{ matrix.make_arch }} \
                CC=${{ matrix.triple }}-gcc \
@@ -92,7 +92,7 @@ jobs:
         with:
           name: binaries-${{ matrix.arch }}
           path: out/*.zip
-
+          
   release:
     name: Create/Update Release & Attach
     needs: build
