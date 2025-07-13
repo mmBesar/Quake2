@@ -2,10 +2,8 @@ name: Build and Release Binaries
 
 on:
   push:
-    branches:
-      - upstream
-    tags:
-      - 'QUAKE2_*'
+    branches: [ upstream ]
+    tags: [ 'QUAKE2_*' ]
   workflow_dispatch:
 
 permissions:
@@ -17,88 +15,85 @@ jobs:
     strategy:
       matrix:
         include:
-          # 1) amd64 Release
           - arch: x86_64
             suffix: linux-amd64
-            cmake_args: "-DCMAKE_BUILD_TYPE=Release"
-            debug: false
-          # 2) amd64 Debug
-          - arch: x86_64
-            suffix: linux-amd64
-            cmake_args: "-DCMAKE_BUILD_TYPE=RelWithDebInfo"
-            debug: true
-          # 3) arm64 Release
+            compiler: gcc
           - arch: aarch64
             suffix: linux-arm64
-            cmake_args: "-DCMAKE_BUILD_TYPE=Release"
-            debug: false
-          # 4) arm64 Debug
-          - arch: aarch64
-            suffix: linux-arm64
-            cmake_args: "-DCMAKE_BUILD_TYPE=RelWithDebInfo"
-            debug: true
+            compiler: aarch64-linux-gnu-gcc
 
     steps:
-      - name: Checkout upstream
-        uses: actions/checkout@v4
-        with:
-          ref: upstream
-          fetch-depth: 0
+    - name: Checkout upstream
+      uses: actions/checkout@v4
+      with:
+        ref: upstream
+        fetch-depth: 0
 
-      - name: Set tag_name
-        id: tag
-        run: |
-          TAG=$(git tag --sort=-creatordate | grep QUAKE2_ | head -1)
-          echo "tag_name=$TAG" >> $GITHUB_OUTPUT
+    - name: Determine TAG
+      id: tag
+      run: |
+        TAG=$(git tag --sort=-creatordate | grep QUAKE2_ | head -1)
+        echo "TAG=$TAG" >> $GITHUB_ENV
 
-      - name: Install build deps & cross‑tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential cmake pkg-config \
-            libsdl2-dev libsdl2-image-dev \
-            libopenal-dev libcurl4-openssl-dev \
-            libx11-dev libxi-dev libgl1-mesa-dev zlib1g-dev \
-            zip
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-          fi
+    - name: Install deps & cross‑compiler
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential cmake pkg-config \
+          libsdl2-dev libsdl2-image-dev \
+          libopenal-dev libcurl4-openssl-dev \
+          libx11-dev libxi-dev libgl1-mesa-dev zlib1g-dev \
+          zip
+        if [ "${{ matrix.arch }}" = "aarch64" ]; then
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+        fi
 
-      - name: Build yquake2 (${{ matrix.arch }}${{ matrix.debug && '/debug' || '' }})
-        run: |
-          mkdir build && cd build
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            cmake .. \
-              ${ { matrix.cmake_args } } \
-              -DCMAKE_SYSTEM_NAME=Linux \
-              -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
-              -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
-              -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
-              -DRUNTIME_OUTPUT_DIRECTORY=release
-          else
-            cmake .. ${ { matrix.cmake_args } } -DRUNTIME_OUTPUT_DIRECTORY=release
-          fi
-          make -j$(nproc)
+    - name: Build with debug symbols (RelWithDebInfo)
+      run: |
+        mkdir build && cd build
+        if [ "${{ matrix.arch }}" = "aarch64" ]; then
+          cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=arm64 \
+            -DCMAKE_C_COMPILER=${{ matrix.compiler }} \
+            -DRUNTIME_OUTPUT_DIRECTORY=release
+        else
+          cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DRUNTIME_OUTPUT_DIRECTORY=release
+        fi
+        make -j$(nproc)
 
-      - name: Prepare Quake2 dir
-        run: |
-          OUT=Quake2-${{ matrix.suffix }}$( [ "${{ matrix.debug }}" = "true" ] && echo "-debug" )
-          mkdir -p $OUT/baseq2
-          cp build/release/quake2        $OUT/
-          cp build/release/q2ded         $OUT/
-          cp build/release/baseq2/game.so $OUT/baseq2/ || true
-          cp build/release/ref_*.so      $OUT/ || true
+    - name: Package Debug ZIP (with symbols)
+      run: |
+        OUT=Quake2-${{ matrix.suffix }}-debug
+        mkdir -p $OUT/baseq2
+        cp build/release/quake2        $OUT/
+        cp build/release/q2ded         $OUT/
+        cp build/release/baseq2/game.so $OUT/baseq2/ || true
+        cp build/release/ref_*.so      $OUT/ || true
+        zip -r quake2-${{ matrix.suffix }}-${{ env.TAG }}-debug.zip $OUT
 
-      - name: Zip output
-        run: |
-          OUT=Quake2-${{ matrix.suffix }}$( [ "${{ matrix.debug }}" = "true" ] && echo "-debug" )
-          zip -r quake2-${{ matrix.suffix }}-${{ steps.tag.outputs.tag_name }}$( [ "${{ matrix.debug }}" = "true" ] && echo "-debug" )\.zip $OUT
+    - name: Strip symbols & Package Release ZIP
+      run: |
+        OUT=Quake2-${{ matrix.suffix }}
+        mkdir -p $OUT/baseq2
+        cp build/release/quake2        $OUT/
+        cp build/release/q2ded         $OUT/
+        cp build/release/baseq2/game.so $OUT/baseq2/ || true
+        cp build/release/ref_*.so      $OUT/ || true
+        # strip symbols for release
+        strip $OUT/quake2 || true
+        strip $OUT/q2ded  || true
+        strip $OUT/*.so   || true
+        zip -r quake2-${{ matrix.suffix }}-${{ env.TAG }}.zip $OUT
 
-      - name: Upload Release Asset
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.tag.outputs.tag_name }}
-          name: ${{ steps.tag.outputs.tag_name }}
-          files: quake2-${{ matrix.suffix }}-${{ steps.tag.outputs.tag_name }}$( [ "${{ matrix.debug }}" = "true" ] && echo "-debug" )\.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Upload Release Assets
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ env.TAG }}
+        name: ${{ env.TAG }}
+        files: |
+          quake2-${{ matrix.suffix }}-${{ env.TAG }}.zip
+          quake2-${{ matrix.suffix }}-${{ env.TAG }}-debug.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
