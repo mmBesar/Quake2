@@ -1,0 +1,57 @@
+name: Build Quake2 Server Docker Image
+
+on:
+  push:
+    tags:
+      - 'QUAKE2_*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: upstream
+
+      - name: Extract tag from ref
+        id: tag
+        run: echo "TAG=${GITHUB_REF##*/}" >> $GITHUB_ENV
+
+      - name: Download latest release zip
+        run: |
+          curl -L -o quake2.zip https://github.com/${{ github.repository }}/releases/download/$TAG/quake2-linux-amd64-$TAG.zip
+          unzip quake2.zip -d quake2
+
+      - name: Prepare Docker build context
+        run: |
+          mv quake2/Quake2 docker-root
+          mkdir -p docker-root/game docker-root/config
+          cp docker-root/baseq2/* docker-root/game/ || true
+          echo 'set dm1 "map q2dm1; set nextmap vstr dm2"' > docker-root/config/maprotation.cfg
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            --build-arg TAG=$TAG \
+            --build-arg ARCH=linux-amd64 \
+            -t ghcr.io/${{ github.repository_owner }}/quake2-server:$TAG \
+            -t ghcr.io/${{ github.repository_owner }}/quake2-server:latest \
+            docker-root
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push Docker image
+        run: |
+          docker push ghcr.io/${{ github.repository_owner }}/quake2-server:$TAG
+          docker push ghcr.io/${{ github.repository_owner }}/quake2-server:latest
