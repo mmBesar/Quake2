@@ -25,6 +25,7 @@ jobs:
     strategy:
       matrix:
         arch: [ amd64, arm64 ]
+
     outputs:
       image_name: ${{ steps.lowercase.outputs.image_name }}
       tag: ${{ env.TAG }}
@@ -61,19 +62,18 @@ jobs:
       - name: Compute lowercase image name
         id: lowercase
         run: |
-          echo "image_name=$(echo $GITHUB_REPOSITORY \
-            | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+          echo "image_name=$(echo $GITHUB_REPOSITORY | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
 
       - name: Build & push ${{ matrix.arch }}
         uses: docker/build-push-action@v3
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/${{ matrix.arch }}
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/${{ steps.lowercase.outputs.image_name }}:${{ env.TAG }}-${{ matrix.arch }}
             ghcr.io/${{ steps.lowercase.outputs.image_name }}:latest-${{ matrix.arch }}
+            ghcr.io/${{ steps.lowercase.outputs.image_name }}:${{ env.TAG }}-${{ matrix.arch }}
           build-args: |
             TAG=${{ env.TAG }}
             ARCH=linux-${{ matrix.arch }}
@@ -83,6 +83,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TAG: ${{ needs.build.outputs.tag }}
+
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
