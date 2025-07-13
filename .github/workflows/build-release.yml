@@ -1,77 +1,109 @@
-name: Build Release
+name: Build and Release Binaries (Docker QEMU)
 
 on:
-  workflow_dispatch:
   push:
-    tags:
-      - "*"
+    branches: [ upstream ]
+    tags:    [ 'QUAKE2_*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build-release:
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-latest
     strategy:
-      fail-fast: false
       matrix:
         include:
           - arch: amd64
-            runner: ubuntu-latest
-            cc: gcc
-            cxx: g++
-            cmake_arch: ""
-            compiler_flags: ""
+            suffix: linux-amd64
+            platform: linux/amd64
           - arch: arm64
-            runner: ubuntu-22.04-arm64
-            cc: gcc
-            cxx: g++
-            cmake_arch: "-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=arm64"
-            compiler_flags: "-DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc"
-
-    env:
-      TAG: ${{ github.ref_name }}
+            suffix: linux-arm64
+            platform: linux/arm64/v8
 
     steps:
-      - name: Checkout repo
+      - name: Checkout upstream
         uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential cmake pkg-config zip \
-            libsdl2-dev libsdl2-image-dev \
-            libopenal-dev libcurl4-openssl-dev \
-            libx11-dev libxi-dev libgl1-mesa-dev zlib1g-dev
-
-          if [ "${{ matrix.arch }}" = "arm64" ]; then
-            sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-          fi
-
-      - name: Build and zip binaries (Release + Debug)
-        run: |
-          set -e
-          mkdir -p out
-
-          for MODE in Release RelWithDebInfo; do
-            DEBUG_SUFFIX=""
-            [[ "$MODE" == "RelWithDebInfo" ]] && DEBUG_SUFFIX="-debug"
-
-            BUILD_DIR=build-${{ matrix.arch }}$DEBUG_SUFFIX
-            INSTALL_DIR=Quake2-linux-${{ matrix.arch }}$DEBUG_SUFFIX
-
-            cmake -S . -B $BUILD_DIR \
-              -DCMAKE_BUILD_TYPE=$MODE \
-              ${{ matrix.cmake_arch }} \
-              ${{ matrix.compiler_flags }} \
-              -DRUNTIME_OUTPUT_DIRECTORY=$BUILD_DIR/release
-
-            cmake --build $BUILD_DIR --parallel
-
-            cp -r $BUILD_DIR/release $INSTALL_DIR
-            zip -r out/quake2-linux-${{ matrix.arch }}-${TAG}${DEBUG_SUFFIX}.zip $INSTALL_DIR
-          done
-
-      - name: Upload Release Artifacts
-        uses: actions/upload-artifact@v4
         with:
-          name: quake2-linux-${{ matrix.arch }}-${{ env.TAG }}
-          path: out/*.zip
+          ref: upstream
+          fetch-depth: 0
+
+      - name: Determine TAG
+        id: tag
+        run: |
+          echo "TAG=$(git tag --sort=-creatordate | grep QUAKE2_ | head -1 || echo main)" >> $GITHUB_ENV
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build for ${{ matrix.arch }}
+        run: |
+          cat > Dockerfile << 'EOF'
+          FROM ubuntu:22.04
+          RUN apt-get update && \
+              DEBIAN_FRONTEND=noninteractive apt-get install -y \
+                build-essential cmake pkg-config zip \
+                libsdl2-dev libsdl2-image-dev \
+                libopenal-dev libcurl4-openssl-dev \
+                libx11-dev libxi-dev libgl1-mesa-dev zlib1g-dev && \
+              rm -rf /var/lib/apt/lists/*
+          
+          WORKDIR /src
+          COPY . .
+
+          RUN mkdir build && cd build && \
+              cmake .. \
+                -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+                -DCMAKE_RUNTIME_OUTPUT_DIRECTORY=release && \
+              make -j$(nproc)
+
+          RUN mkdir -p /output/build && cp -r build/release/* /output/build/
+          EOF
+
+          docker buildx build \
+            --platform ${{ matrix.platform }} \
+            --output type=local,dest=./output \
+            .
+
+      - name: Package Debug ZIP
+        run: |
+          OUT=Quake2-${{ matrix.suffix }}-debug
+          mkdir -p $OUT/baseq2
+          cp output/build/quake2         $OUT/ || true
+          cp output/build/q2ded          $OUT/ || true
+          cp output/build/baseq2/game.so $OUT/baseq2/ || true
+          cp output/build/ref_*.so       $OUT/ || true
+          zip -r quake2-${{ matrix.suffix }}-${{ env.TAG }}-debug.zip $OUT
+
+      - name: Strip & Package Release ZIP
+        run: |
+          OUT=Quake2-${{ matrix.suffix }}
+          mkdir -p $OUT/baseq2
+          cp output/build/quake2         $OUT/ || true
+          cp output/build/q2ded          $OUT/ || true
+          cp output/build/baseq2/game.so $OUT/baseq2/ || true
+          cp output/build/ref_*.so       $OUT/ || true
+
+          docker run --rm --platform ${{ matrix.platform }} \
+            -v $(pwd)/$OUT:/workspace ubuntu:22.04 \
+            sh -c "apt-get update && apt-get install -y binutils && \
+                   strip /workspace/quake2 /workspace/q2ded /workspace/*.so 2>/dev/null || true"
+
+          zip -r quake2-${{ matrix.suffix }}-${{ env.TAG }}.zip $OUT
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: ${{ env.TAG }}
+          files: |
+            quake2-${{ matrix.suffix }}-${{ env.TAG }}.zip
+            quake2-${{ matrix.suffix }}-${{ env.TAG }}-debug.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
