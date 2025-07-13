@@ -3,7 +3,7 @@ name: Build and Release Binaries
 on:
   push:
     branches: [ upstream ]
-    tags: [ 'QUAKE2_*' ]
+    tags:    [ 'QUAKE2_*' ]
   workflow_dispatch:
 
 permissions:
@@ -12,16 +12,19 @@ permissions:
 jobs:
   build-release:
     runs-on: ubuntu-latest
-
     strategy:
       matrix:
         include:
           # native amd64
           - arch: x86_64
             suffix: linux-amd64
+            cc: gcc
+            cxx: g++
           # cross‑compile arm64
           - arch: aarch64
             suffix: linux-arm64
+            cc: aarch64-linux-gnu-gcc
+            cxx: aarch64-linux-gnu-g++
 
     steps:
       - name: Checkout upstream
@@ -45,7 +48,6 @@ jobs:
             libopenal-dev libcurl4-openssl-dev \
             libx11-dev libxi-dev libgl1-mesa-dev zlib1g-dev
           if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            # Register ARM64 and install cross-toolchain + arm64 libs
             sudo dpkg --add-architecture arm64
             sudo apt-get update
             DEBIAN_FRONTEND=noninteractive sudo apt-get install -y \
@@ -54,17 +56,16 @@ jobs:
               libopenal-dev:arm64 libcurl4-openssl-dev:arm64 \
               libx11-dev:arm64 libxi-dev:arm64 \
               libgl1-mesa-dev:arm64 zlib1g-dev:arm64
-            export CC=aarch64-linux-gnu-gcc
-            export CXX=aarch64-linux-gnu-g++
           fi
 
       - name: Build with debug symbols
         run: |
           mkdir build && cd build
+          CC=${{ matrix.cc }} CXX=${{ matrix.cxx }} \
           cmake .. \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DRUNTIME_OUTPUT_DIRECTORY=release \
-            ${ { matrix.arch == 'aarch64' && '-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=arm64' || '' } }
+            $( [ "${{ matrix.arch }}" = "aarch64" ] && echo "-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=arm64" )
           make -j$(nproc)
 
       - name: Package Debug ZIP
@@ -94,7 +95,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
-          name: ${{ env.TAG }}
+          name:     ${{ env.TAG }}
           files: |
             quake2-${{ matrix.suffix }}-${{ env.TAG }}.zip
             quake2-${{ matrix.suffix }}-${{ env.TAG }}-debug.zip
