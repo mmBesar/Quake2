@@ -16,78 +16,71 @@ jobs:
     outputs:
       tag: ${{ steps.get_tag.outputs.latest }}
     steps:
-      - name: Checkout upstream branch with full history
+      - name: Checkout full history
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Force‑fetch all tags
-        run: |
-          git fetch --tags --force
+      - name: Force‑fetch tags
+        run: git fetch --tags --force
 
-      - name: Determine latest upstream tag
+      - name: Get latest tag
         id: get_tag
         run: |
           latest=$(git describe --tags "$(git rev-list --tags --max-count=1)")
           echo "latest=$latest" >> $GITHUB_OUTPUT
 
   build:
-    name: Cross‑compile & ZIP
+    name: Containerized Cross‑compile & ZIP
     needs: prepare
     runs-on: ubuntu-22.04
     strategy:
       matrix:
         include:
           - arch: amd64
-            triple: x86_64-linux-gnu
             make_arch: linux-x86_64
           - arch: arm64
-            triple: aarch64-linux-gnu
             make_arch: linux-aarch64
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Install native toolchain & libs
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libsdl2-dev zlib1g-dev
+      - name: Set up QEMU emulation
+        uses: docker/setup-qemu-action@v3
 
-      - name: Install Arm64 cross‑toolchain & libs
-        if: ${{ matrix.arch == 'arm64' }}
+      - name: Build RELEASE & ZIP in container
         run: |
-          sudo dpkg --add-architecture arm64
-          sudo apt-get update
-          sudo apt-get install -y \
-            gcc-${{ matrix.triple }} \
-            g++-${{ matrix.triple }} \
-            binutils-${{ matrix.triple }} \
-            libsdl2-dev:arm64 \
-            zlib1g-dev:arm64
-
-      - name: Build RELEASE & zip
-        run: |
-          git clean -fdx
-          make BUILD=release \
-               ARCH=${{ matrix.make_arch }} \
-               CC=${{ matrix.triple }}-gcc \
-               CXX=${{ matrix.triple }}-g++
           mkdir -p out
-          zip -j out/quake2-linux-${{ matrix.arch }}-${{ needs.prepare.outputs.tag }}.zip \
-            quake2 q2ded ref_*.so baseq2/game.so
+          docker run --rm \
+            --platform linux/${{ matrix.arch }} \
+            -v ${{ github.workspace }}:/src \
+            -w /src \
+            ubuntu:22.04 \
+            bash -euxc "
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y \
+                build-essential pkg-config libsdl2-dev zlib1g-dev \
+                zip git
+              git clean -fdx
+              make BUILD=release ARCH=${{ matrix.make_arch }}
+              zip -j out/quake2-linux-${{ matrix.arch }}-${{ needs.prepare.outputs.tag }}.zip \
+                quake2 q2ded ref_*.so baseq2/game.so
+            "
 
-      - name: Build DEBUG & zip
+      - name: Build DEBUG & ZIP in container
         run: |
-          git clean -fdx
-          make BUILD=debug \
-               ARCH=${{ matrix.make_arch }} \
-               CC=${{ matrix.triple }}-gcc \
-               CXX=${{ matrix.triple }}-g++
-          zip -j out/quake2-linux-${{ matrix.arch }}-${{ needs.prepare.outputs.tag }}-debug.zip \
-            quake2 q2ded ref_*.so baseq2/game.so
+          docker run --rm \
+            --platform linux/${{ matrix.arch }} \
+            -v ${{ github.workspace }}:/src \
+            -w /src \
+            ubuntu:22.04 \
+            bash -euxc "
+              git clean -fdx
+              make BUILD=debug ARCH=${{ matrix.make_arch }}
+              zip -j out/quake2-linux-${{ matrix.arch }}-${{ needs.prepare.outputs.tag }}-debug.zip \
+                quake2 q2ded ref_*.so baseq2/game.so
+            "
 
       - name: Upload ZIPs as artifact
         uses: actions/upload-artifact@v4
