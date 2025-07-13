@@ -14,18 +14,20 @@ jobs:
     strategy:
       matrix:
         include:
-          # 1) amd64 on an AMD64 runner
+          # AMD64 native build
           - arch: x86_64
             suffix: linux-amd64
             runner: ubuntu-latest
             cc: gcc
             cxx: g++
-          # 2) arm64 on a real ARM64 runner
+            cmake_args: ""
+          # ARM64 cross-compilation
           - arch: aarch64
             suffix: linux-arm64
-            runner: ubuntu-22.04-arm64
-            cc: gcc
-            cxx: g++
+            runner: ubuntu-latest
+            cc: aarch64-linux-gnu-gcc
+            cxx: aarch64-linux-gnu-g++
+            cmake_args: "-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++"
 
     runs-on: ${{ matrix.runner }}
 
@@ -44,11 +46,35 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          DEBIAN_FRONTEND=noninteractive sudo apt-get install -y \
-            build-essential cmake pkg-config zip \
-            libsdl2-dev libsdl2-image-dev \
-            libopenal-dev libcurl4-openssl-dev \
-            libx11-dev libxi-dev libgl1-mesa-dev zlib1g-dev
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            # ARM64 cross-compilation setup
+            DEBIAN_FRONTEND=noninteractive sudo apt-get install -y \
+              build-essential cmake pkg-config zip \
+              gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+              libc6-dev-arm64-cross
+            
+            # Add ARM64 architecture and install cross-compile libraries
+            sudo dpkg --add-architecture arm64
+            sudo apt-get update
+            DEBIAN_FRONTEND=noninteractive sudo apt-get install -y \
+              libsdl2-dev:arm64 libsdl2-image-dev:arm64 \
+              libopenal-dev:arm64 libcurl4-openssl-dev:arm64 \
+              libx11-dev:arm64 libxi-dev:arm64 libgl1-mesa-dev:arm64 \
+              zlib1g-dev:arm64
+            
+            # Set up pkg-config for cross-compilation
+            export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
+            export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+            echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> $GITHUB_ENV
+            echo "PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" >> $GITHUB_ENV
+          else
+            # AMD64 native build
+            DEBIAN_FRONTEND=noninteractive sudo apt-get install -y \
+              build-essential cmake pkg-config zip \
+              libsdl2-dev libsdl2-image-dev \
+              libopenal-dev libcurl4-openssl-dev \
+              libx11-dev libxi-dev libgl1-mesa-dev zlib1g-dev
+          fi
 
       - name: Build with debug symbols
         run: |
@@ -57,7 +83,7 @@ jobs:
             cmake .. \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo \
               -DRUNTIME_OUTPUT_DIRECTORY=release \
-              $( [ "${{ matrix.arch }}" = "aarch64" ] && echo "-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=arm64" )
+              ${{ matrix.cmake_args }}
           make -j$(nproc)
 
       - name: Package Debug ZIP
@@ -78,9 +104,18 @@ jobs:
           cp build/release/q2ded          $OUT/
           cp build/release/baseq2/game.so $OUT/baseq2/ || true
           cp build/release/ref_*.so       $OUT/     || true
-          strip $OUT/quake2 || true
-          strip $OUT/q2ded  || true
-          strip $OUT/*.so   || true
+          
+          # Use appropriate strip command for each architecture
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            aarch64-linux-gnu-strip $OUT/quake2 || true
+            aarch64-linux-gnu-strip $OUT/q2ded  || true
+            aarch64-linux-gnu-strip $OUT/*.so   || true
+          else
+            strip $OUT/quake2 || true
+            strip $OUT/q2ded  || true
+            strip $OUT/*.so   || true
+          fi
+          
           zip -r quake2-${{ matrix.suffix }}-${{ env.TAG }}.zip $OUT
 
       - name: Upload Release Assets
