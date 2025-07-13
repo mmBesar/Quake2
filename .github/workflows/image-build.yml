@@ -2,15 +2,15 @@ name: Build, Push & Manifest Multi‑Arch Image
 
 on:
   push:
-    branches: [ main ]
+    branches: [ upstream ]
     paths:
-      - '.github/workflows/image‑build.yml'
+      - '.github/workflows/image-build.yml'
       - 'Dockerfile'
       - 'scripts/start.sh'
   pull_request:
-    branches: [ main ]
+    branches: [ upstream ]
     paths:
-      - '.github/workflows/image‑build.yml'
+      - '.github/workflows/image-build.yml'
       - 'Dockerfile'
       - 'scripts/start.sh'
   workflow_dispatch:
@@ -24,15 +24,21 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [ amd64, arm64 ]
-
+        arch: [amd64, arm64]
     outputs:
       image_name: ${{ steps.lowercase.outputs.image_name }}
       tag: ${{ env.TAG }}
 
     steps:
-      - name: Checkout code
+      - name: Checkout upstream branch
         uses: actions/checkout@v4
+        with:
+          ref: upstream
+
+      - name: Install tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
 
       - name: Set up QEMU for cross‑builds
         uses: docker/setup-qemu-action@v2
@@ -47,29 +53,32 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Determine release tag (support tag or latest)
+      - name: Determine release tag (tag or latest)
         id: tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             echo "TAG=${GITHUB_REF##*/}" >> $GITHUB_ENV
           else
-            TAG=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | jq -r .tag_name)
+            TAG=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+              https://api.github.com/repos/${{ github.repository }}/releases/latest \
+              | jq -r .tag_name)
             echo "TAG=$TAG" >> $GITHUB_ENV
           fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Compute lowercase image name
         id: lowercase
         run: |
-          echo "image_name=$(echo $GITHUB_REPOSITORY | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+          IMAGE=$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')
+          echo "image_name=$IMAGE" >> $GITHUB_OUTPUT
 
       - name: Build & push ${{ matrix.arch }}
         uses: docker/build-push-action@v3
         with:
           context: .
-          file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
+          file: Dockerfile
+          platforms: linux/${{ matrix.arch }}
           push: true
           tags: |
             ghcr.io/${{ steps.lowercase.outputs.image_name }}:latest-${{ matrix.arch }}
