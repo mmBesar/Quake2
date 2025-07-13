@@ -1,84 +1,67 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -e
 
-# Use mounted config if available
-CONFIG_DIR="${Q2_DIR}/config"
-GAME_DIR="${Q2_DIR}/game"
+# Directories
+Q2DIR=/srv/quake2
+CONFIG=${Q2DIR}/config
+GAME=${Q2DIR}/game
 
-MAP_ROTATION_FILE="$CONFIG_DIR/maprotation.cfg"
-DEFAULT_GAME_DIR="$Q2_DIR/${Q2_GAME}"
+echo "┌────────────────────────────────────────"
+echo "│ Starting Quake2 Server"
+echo "├────────────────────────────────────────"
+echo "│ Game mod:        $Q2_GAME"
+echo "│ Game mode:       $Q2_GAME_MODE"
+echo "│ Public (1/0):    $Q2_PUBLIC"
+echo "│ Max clients:     $Q2_MAXCLIENTS"
+echo "│ Timelimit:       $Q2_TIMELIMIT"
+echo "│ Fraglimit:       $Q2_FRAGLIMIT"
+echo "│ Port:            $Q2_PORT"
+echo "│ Hostname:        $Q2_HOSTNAME"
+echo "│ Map:             $Q2_MAP"
+echo "│ Bots enabled:    $Q2_BOTS"
+echo "│ Bot skill:       $Q2_BOT_SKILL"
+echo "├────────────────────────────────────────"
 
-# Print environment info
-echo ">>> Quake2 Server Startup"
-echo "Game directory: $DEFAULT_GAME_DIR"
-echo "Config directory: $CONFIG_DIR"
-echo "Game mode: $Q2_GAME_MODE"
-echo "Bot support: ${Q2_BOTS}"
-echo "Hostname: $Q2_HOSTNAME"
-echo "Port: $Q2_PORT"
-echo "Map rotation: $MAP_ROTATION_FILE"
-
-# Prepare game directory symlink
-if [ -d "$GAME_DIR" ]; then
-    echo "Using mounted game directory: $GAME_DIR"
+# Mount logic
+if [ -d "$GAME" ] && [ "$(ls -A $GAME)" ]; then
+  echo "Using mounted game folder"
 else
-    echo "No external game dir mounted, using: $DEFAULT_GAME_DIR"
-    ln -sf "$DEFAULT_GAME_DIR" "$GAME_DIR"
+  echo "No /srv/quake2/game mount detected, using built-in"
+  ln -sf "${Q2DIR}/${Q2_GAME}" game
 fi
 
-# Game mode logic
-GAME_MODE_FLAGS=""
+# Build command‑line args
+ARGS="+set dedicated 1"
+ARGS+=" +set port $Q2_PORT"
+ARGS+=" +set hostname \"$Q2_HOSTNAME\""
+ARGS+=" +set maxclients $Q2_MAXCLIENTS"
+ARGS+=" +set timelimit $Q2_TIMELIMIT"
+ARGS+=" +set fraglimit $Q2_FRAGLIMIT"
+ARGS+=" +set public $Q2_PUBLIC"
+ARGS+=" +set password \"$Q2_PASSWORD\""
+ARGS+=" +set game $Q2_GAME"
+
+# Game mode flags
 case "$Q2_GAME_MODE" in
-  deathmatch)
-    GAME_MODE_FLAGS="+set deathmatch 1 +set coop 0 +set teamplay 0"
-    ;;
-  deathmatch-teamplay)
-    GAME_MODE_FLAGS="+set deathmatch 1 +set coop 0 +set teamplay 1"
-    ;;
-  coop)
-    GAME_MODE_FLAGS="+set deathmatch 0 +set coop 1 +set teamplay 0"
-    ;;
-  coop-teamplay)
-    GAME_MODE_FLAGS="+set deathmatch 0 +set coop 1 +set teamplay 1"
-    ;;
-  *)
-    echo "Unknown Q2_GAME_MODE: $Q2_GAME_MODE"
-    exit 1
-    ;;
+  deathmatch)        ARGS+=" +set deathmatch 1 +set coop 0 +set teamplay 0" ;;
+  deathmatch-teamplay) ARGS+=" +set deathmatch 1 +set coop 0 +set teamplay 1" ;;
+  coop)              ARGS+=" +set deathmatch 0 +set coop 1 +set teamplay 0" ;;
+  coop-teamplay)     ARGS+=" +set deathmatch 0 +set coop 1 +set teamplay 1" ;;
+  *) echo "Unknown Q2_GAME_MODE: $Q2_GAME_MODE"; exit 1 ;;
 esac
 
-# Add bots if requested and ACEBot is available
-BOT_FLAGS=""
-if [[ "$Q2_BOTS" == "1" ]]; then
-    if [[ -f "${Q2_DIR}/acebot/game.so" ]]; then
-        echo "ACEBot found and enabled (skill=$Q2_BOT_SKILL)"
-        Q2_GAME="acebot"
-        BOT_FLAGS="+set skill $Q2_BOT_SKILL"
-    else
-        echo "Warning: ACEBot requested but not found!"
-    fi
+# Map rotation config
+ARGS+=" +exec config/maprotation.cfg"
+
+# Start map
+ARGS+=" +map $Q2_MAP"
+
+# Bot flags
+if [ "$Q2_BOTS" = "1" ]; then
+  echo "Enabling built‑in AceBot (skill $Q2_BOT_SKILL)"
+  ARGS+=" +set skill $Q2_BOT_SKILL +set bot_num $Q2_BOTS"
 fi
 
-# Default map if not set
-if [[ -z "$Q2_MAP" ]]; then
-    Q2_MAP="q2dm1"
-fi
-
-# Ensure correct permissions
-chown -R quake2:quake2 "${Q2_DIR}"
-
-# Start the server
-exec "${Q2_DIR}/q2ded" \
-    +set dedicated 1 \
-    +set port "${Q2_PORT}" \
-    +set hostname "${Q2_HOSTNAME}" \
-    +set maxclients "${Q2_MAXCLIENTS}" \
-    +set timelimit "${Q2_TIMELIMIT}" \
-    +set fraglimit "${Q2_FRAGLIMIT}" \
-    +set public "${Q2_PUBLIC}" \
-    +set password "${Q2_PASSWORD}" \
-    +set game "${Q2_GAME}" \
-    +exec "config/maprotation.cfg" \
-    $GAME_MODE_FLAGS \
-    $BOT_FLAGS \
-    +map "${Q2_MAP}"
+echo "└────────────────────────────────────────"
+echo "Final command: ./q2ded $ARGS"
+exec ./q2ded $ARGS
