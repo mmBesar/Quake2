@@ -86,6 +86,9 @@ jobs:
   manifest:
     needs: build
     runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.build.outputs.tag }}
+
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
@@ -100,7 +103,6 @@ jobs:
       - name: Create multi-arch manifest
         run: |
           IMAGE=${{ needs.build.outputs.image_name }}
-          TAG=${{ needs.build.outputs.tag }}
           docker buildx imagetools create \
             --tag ghcr.io/$IMAGE:latest \
             ghcr.io/$IMAGE:latest-amd64 \
@@ -110,3 +112,4 @@ jobs:
             --tag ghcr.io/$IMAGE:$TAG \
             ghcr.io/$IMAGE:$TAG-amd64 \
             ghcr.io/$IMAGE:$TAG-arm64
+
