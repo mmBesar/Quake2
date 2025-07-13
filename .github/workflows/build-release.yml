@@ -15,12 +15,10 @@ jobs:
     strategy:
       matrix:
         include:
-          # native amd64
           - arch: x86_64
             suffix: linux-amd64
             cc: gcc
             cxx: g++
-          # cross‑compile arm64
           - arch: aarch64
             suffix: linux-arm64
             cc: aarch64-linux-gnu-gcc
@@ -39,6 +37,12 @@ jobs:
           TAG=$(git tag --sort=-creatordate | grep QUAKE2_ | head -1)
           echo "TAG=$TAG" >> $GITHUB_ENV
 
+      - name: Remap ARM64 sources to jammy
+        if: matrix.arch == 'aarch64'
+        run: |
+          # Runner is Ubuntu 24.04 ("noble") but its arm64 security repos are missing.
+          sudo sed -i 's/noble/jammy/g' /etc/apt/sources.list
+
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -47,6 +51,7 @@ jobs:
             libsdl2-dev libsdl2-image-dev \
             libopenal-dev libcurl4-openssl-dev \
             libx11-dev libxi-dev libgl1-mesa-dev zlib1g-dev
+
           if [ "${{ matrix.arch }}" = "aarch64" ]; then
             sudo dpkg --add-architecture arm64
             sudo apt-get update
