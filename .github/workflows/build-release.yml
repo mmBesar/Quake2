@@ -40,13 +40,11 @@ jobs:
       - name: Fix ARM64 apt sources
         if: matrix.arch == 'aarch64'
         run: |
-          # Comment out every security.ubuntu.com entry
+          # Comment out any problematic lines in ALL sources.list files
           sudo find /etc/apt -type f -name "*.list" \
-            -exec sed -i '/security.ubuntu.com/ s/^/#/' {} +
-
-          # Remap noble → jammy everywhere
-          sudo find /etc/apt -type f -name "*.list" \
-            -exec sed -i 's/noble/jammy/g' {} +
+            -exec sed -i -e '/security.ubuntu.com/ s/^/#/' \
+                         -e '/packages.microsoft.com/ s/^/#/' \
+                         -e '/azure.archive.ubuntu.com/ s/noble/jammy/g' {} +
 
       - name: Install build dependencies
         run: |
@@ -58,6 +56,7 @@ jobs:
             libx11-dev libxi-dev libgl1-mesa-dev zlib1g-dev
 
           if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            # Register ARM64 and install ARM64 dev‑libs
             sudo dpkg --add-architecture arm64
             sudo apt-get update
             DEBIAN_FRONTEND=noninteractive sudo apt-get install -y \
