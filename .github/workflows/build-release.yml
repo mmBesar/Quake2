@@ -1,9 +1,9 @@
-name: Build and Release Binaries (Multi-Arch)
+name: Build and Release Quake2 Binaries
 
 on:
   push:
     branches: [ upstream ]
-    tags:    [ 'QUAKE2_*' ]
+    tags: [ 'QUAKE2_*' ]
   workflow_dispatch:
 
 permissions:
@@ -16,25 +16,24 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            platform: linux/amd64
             suffix: linux-amd64
+            platform: linux/amd64
           - arch: arm64
-            platform: linux/arm64/v8
             suffix: linux-arm64
+            platform: linux/arm64/v8
 
     steps:
-      - name: Checkout upstream source
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           ref: upstream
           fetch-depth: 0
 
-      - name: Determine latest tag
+      - name: Determine latest QUAKE2_* tag
         id: tag
-        run: |
-          echo "TAG=$(git tag --sort=-creatordate | grep QUAKE2_ | head -1)" >> $GITHUB_ENV
+        run: echo "TAG=$(git tag --sort=-creatordate | grep QUAKE2_ | head -1)" >> $GITHUB_ENV
 
-      - name: Set up QEMU
+      - name: Set up QEMU for cross-arch builds
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
@@ -60,6 +59,8 @@ jobs:
           WORKDIR /src
           COPY . .
 
+          RUN test -f CMakeLists.txt || (echo "Missing CMakeLists.txt" && exit 1)
+
           RUN mkdir build && cd build && \
               cmake .. \
                 -DCMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -79,7 +80,7 @@ jobs:
             --output type=local,dest=output-${{ matrix.arch }} \
             .
 
-      - name: Package debug ZIP
+      - name: Package Debug ZIP
         run: |
           OUT=Quake2-${{ matrix.suffix }}-debug
           mkdir -p $OUT/baseq2
@@ -89,7 +90,7 @@ jobs:
           cp output-${{ matrix.arch }}/baseq2/game.so $OUT/baseq2/ || true
           zip -r quake2-${{ matrix.suffix }}-${{ env.TAG }}-debug.zip $OUT
 
-      - name: Strip & Package release ZIP
+      - name: Strip & Package Release ZIP
         run: |
           OUT=Quake2-${{ matrix.suffix }}
           mkdir -p $OUT/baseq2
@@ -100,12 +101,12 @@ jobs:
 
           docker run --rm --platform ${{ matrix.platform }} \
             -v $(pwd)/$OUT:/workspace ubuntu:22.04 \
-            bash -c "apt update && apt install -y binutils && \
-                     strip /workspace/quake2 /workspace/q2ded /workspace/*.so 2>/dev/null || true"
+            sh -c "apt-get update && apt-get install -y binutils && \
+                   strip /workspace/quake2 /workspace/q2ded /workspace/*.so 2>/dev/null || true"
 
           zip -r quake2-${{ matrix.suffix }}-${{ env.TAG }}.zip $OUT
 
-      - name: Upload release artifacts
+      - name: Upload ZIPs to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
