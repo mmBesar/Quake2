@@ -16,7 +16,7 @@ jobs:
     outputs:
       tag: ${{ steps.get_tag.outputs.latest }}
     steps:
-      - name: Checkout upstream branch & tags
+      - name: Checkout upstream branch with full history
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -25,7 +25,7 @@ jobs:
         run: |
           git fetch --tags --force
 
-      - name: Determine latest tag
+      - name: Determine latest upstream tag
         id: get_tag
         run: |
           latest=$(git describe --tags "$(git rev-list --tags --max-count=1)")
@@ -46,32 +46,29 @@ jobs:
             make_arch: linux-aarch64
 
     steps:
-      - name: Fresh clone & checkout upstream
-        run: |
-          rm -rf repo
-          git clone https://github.com/${{ github.repository }} repo
-          cd repo
-          git fetch --tags --force
-          git checkout upstream
-          cd ..
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Install host & cross toolchains
+      - name: Install native toolchain & libs
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential pkg-config libsdl2-dev zlib1g-dev \
-            gcc-${{ matrix.triple }} g++-${{ matrix.triple }} binutils-${{ matrix.triple }}
+          sudo apt-get install -y build-essential pkg-config libsdl2-dev zlib1g-dev
 
-      - name: Enable multi‑arch & install Arm64 libs
+      - name: Install Arm64 cross‑toolchain & libs
         if: ${{ matrix.arch == 'arm64' }}
         run: |
           sudo dpkg --add-architecture arm64
           sudo apt-get update
           sudo apt-get install -y \
-            libsdl2-dev:arm64 zlib1g-dev:arm64
+            gcc-${{ matrix.triple }} \
+            g++-${{ matrix.triple }} \
+            binutils-${{ matrix.triple }} \
+            libsdl2-dev:arm64 \
+            zlib1g-dev:arm64
 
       - name: Build RELEASE & zip
-        working-directory: repo
         run: |
           git clean -fdx
           make BUILD=release \
@@ -79,30 +76,27 @@ jobs:
                CC=${{ matrix.triple }}-gcc \
                CXX=${{ matrix.triple }}-g++
           mkdir -p out
-          zip -j \
-            ../out/quake2-linux-${{ matrix.arch }}-${{ needs.prepare.outputs.tag }}.zip \
+          zip -j out/quake2-linux-${{ matrix.arch }}-${{ needs.prepare.outputs.tag }}.zip \
             quake2 q2ded ref_*.so baseq2/game.so
 
       - name: Build DEBUG & zip
-        working-directory: repo
         run: |
           git clean -fdx
           make BUILD=debug \
                ARCH=${{ matrix.make_arch }} \
                CC=${{ matrix.triple }}-gcc \
                CXX=${{ matrix.triple }}-g++
-          zip -j \
-            ../out/quake2-linux-${{ matrix.arch }}-${{ needs.prepare.outputs.tag }}-debug.zip \
+          zip -j out/quake2-linux-${{ matrix.arch }}-${{ needs.prepare.outputs.tag }}-debug.zip \
             quake2 q2ded ref_*.so baseq2/game.so
 
-      - name: Upload zips as artifact
+      - name: Upload ZIPs as artifact
         uses: actions/upload-artifact@v4
         with:
           name: binaries-${{ matrix.arch }}
           path: out/*.zip
-          
+
   release:
-    name: Create/Update Release & Attach
+    name: Create or Update GitHub Release
     needs: build
     runs-on: ubuntu-22.04
     steps:
@@ -134,5 +128,5 @@ jobs:
           asset_path: |
             artifacts/amd64/*.zip
             artifacts/arm64/*.zip
-          asset_name: ''            # keeps each ZIP’s basename
+          asset_name: ''
           asset_content_type: application/zip
