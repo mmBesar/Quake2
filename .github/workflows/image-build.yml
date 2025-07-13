@@ -76,10 +76,10 @@ jobs:
           context: ./docker-root
           push: true
           tags: |
-            ghcr.io/${{ steps.lowercase.outputs.image_name }}:$TAG-${{ matrix.arch }}
+            ghcr.io/${{ steps.lowercase.outputs.image_name }}:${{ env.TAG }}-${{ matrix.arch }}
             ghcr.io/${{ steps.lowercase.outputs.image_name }}:latest-${{ matrix.arch }}
           build-args: |
-            TAG=$TAG
+            TAG=${{ env.TAG }}
             ARCH=linux-${{ matrix.arch }}
 
   manifest:
@@ -105,6 +105,6 @@ jobs:
             ghcr.io/$IMAGE:latest-arm64
 
           docker buildx imagetools create \
-            --tag ghcr.io/$IMAGE:$TAG \
-            ghcr.io/$IMAGE:$TAG-amd64 \
-            ghcr.io/$IMAGE:$TAG-arm64
+            --tag ghcr.io/$IMAGE:${{ env.TAG }} \
+            ghcr.io/$IMAGE:${{ env.TAG }}-amd64 \
+            ghcr.io/$IMAGE:${{ env.TAG }}-arm64
