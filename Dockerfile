@@ -1,29 +1,31 @@
-# Stage 1: Download and unpack the Quake2 release
+###############################################################################
+# Stage 1: Download pre‑built Quake2 binaries (multi‑arch)
+###############################################################################
 FROM curlimages/curl:latest AS downloader
 
 ARG TAG
 ARG ARCH
-ARG GAME_DIR=Quake2
 
 WORKDIR /tmp
-RUN curl -fL -o quake2.zip \
-      https://github.com/mmBesar/Quake2/releases/download/${TAG}/quake2-${ARCH}-${TAG}.zip \
-    && unzip quake2.zip \
-    && mv ${GAME_DIR} quake2
 
+# Fetch the ZIP for the right arch/tag, unpack into /quake2
+RUN curl -fL -o quake2.zip \
+      https://github.com/mmBesar/Quake2/releases/download/${TAG}/quake2-linux-${ARCH}-${TAG}.zip \
+    && unzip quake2.zip \
+    && mv Quake2 /quake2
+
+###############################################################################
 # Stage 2: Runtime image
+###############################################################################
 FROM debian:bullseye-slim
 
 LABEL maintainer="mmBesar"
 LABEL org.opencontainers.image.source="https://github.com/mmBesar/Quake2"
 
-ARG Q2_PORT=27910
-ENV Q2_PORT=${Q2_PORT}
-
 # Install runtime deps
-RUN apt-get update \
- && apt-get install -y libstdc++6 tzdata ca-certificates libopenal1 libsdl2-2.0-0 libgl1 curl unzip \
- && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y \
+    libsdl2-2.0-0 libopenal1 libcurl4 tzdata ca-certificates unzip \
+  && rm -rf /var/lib/apt/lists/*
 
 # Create quake2 user
 ARG PUID=1000
@@ -31,19 +33,31 @@ ARG PGID=1000
 RUN groupadd -g ${PGID} quake2 \
  && useradd -u ${PUID} -g quake2 -m -s /bin/bash quake2
 
-ENV TZ=UTC
-ENV Q2_DIR=/srv/quake2
-# (other ENV vars…)
+# Default ENV values (override at docker run)
+ENV TZ=UTC \
+    Q2_DIR=/srv/quake2 \
+    Q2_PORT=27910 \
+    Q2_HOSTNAME="Docker Quake2 Server" \
+    Q2_MAXCLIENTS=8 \
+    Q2_TIMELIMIT=20 \
+    Q2_FRAGLIMIT=30 \
+    Q2_PASSWORD="" \
+    Q2_PUBLIC=0 \
+    Q2_MAP=q2dm1 \
+    Q2_GAME=baseq2 \
+    Q2_GAME_MODE=deathmatch \
+    Q2_BOTS=0 \
+    Q2_BOT_SKILL=1
 
-# Copy the unpacked files from Stage 1
-COPY --from=downloader /tmp/quake2 ${Q2_DIR}
+# Copy the binaries into place
+COPY --from=downloader /quake2 ${Q2_DIR}
 
-# Setup config & game dirs
+# Prepare config & game dirs
 RUN mkdir -p ${Q2_DIR}/config ${Q2_DIR}/game \
  && echo 'set dm1 "map q2dm1; set nextmap vstr dm2"' > ${Q2_DIR}/config/maprotation.cfg \
  && echo 'set dm2 "map q2dm2; set nextmap vstr dm1"' >> ${Q2_DIR}/config/maprotation.cfg
 
-# Copy entrypoint
+# Copy entrypoint script
 COPY scripts/start.sh /usr/local/bin/start.sh
 RUN chmod +x /usr/local/bin/start.sh
 
