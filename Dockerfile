@@ -8,11 +8,14 @@ ARG ARCH
 
 WORKDIR /tmp
 
-# Fetch the ZIP for the right arch/tag, unpack into /quake2
+# 1) Fetch the ZIP for the right arch/tag
+# 2) Unpack into /tmp/Quake2
 RUN curl -fL -o quake2.zip \
       https://github.com/mmBesar/Quake2/releases/download/${TAG}/quake2-linux-${ARCH}-${TAG}.zip \
-    && unzip quake2.zip \
-    && mv Quake2 /quake2
+    && unzip quake2.zip
+
+# Rename to a stable directory name
+RUN mv Quake2 quake2
 
 ###############################################################################
 # Stage 2: Runtime image
@@ -49,8 +52,8 @@ ENV TZ=UTC \
     Q2_BOTS=0 \
     Q2_BOT_SKILL=1
 
-# Copy the binaries into place
-COPY --from=downloader /quake2 ${Q2_DIR}
+# Copy the binaries into place from the downloader stage
+COPY --from=downloader /tmp/quake2 ${Q2_DIR}
 
 # Prepare config & game dirs
 RUN mkdir -p ${Q2_DIR}/config ${Q2_DIR}/game \
