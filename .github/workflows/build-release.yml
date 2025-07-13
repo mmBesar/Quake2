@@ -33,10 +33,9 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Set TAG name
-        run: |
-          echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+        run: echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
 
-      - name: Build in Docker for ${{ matrix.arch }}
+      - name: Build for ${{ matrix.arch }}
         run: |
           mkdir -p output-${{ matrix.arch }}
           cat << 'EOF' > Dockerfile.build
@@ -70,9 +69,10 @@ jobs:
             --platform ${{ matrix.platform }} \
             --file Dockerfile.build \
             --output type=local,dest=output-${{ matrix.arch }} \
+            --build-context .=$(pwd) \
             .
 
-      - name: Package binaries for ${{ matrix.arch }}
+      - name: Package binaries
         run: |
           OUTDIR=Quake2-linux-${{ matrix.arch }}
           mkdir -p $OUTDIR/baseq2
