@@ -55,7 +55,7 @@ jobs:
 
       - name: Download release zip
         run: |
-          curl -L -o quake2.zip https://github.com/${{ github.repository }}/releases/download/$TAG/quake2-linux-${{ matrix.arch }}-$TAG.zip
+          curl -fL -o quake2.zip https://github.com/${{ github.repository }}/releases/download/$TAG/quake2-linux-${{ matrix.arch }}-$TAG.zip
           unzip quake2.zip -d quake2
 
       - name: Prepare Docker build context
@@ -110,6 +110,7 @@ jobs:
       - name: Create multi-arch manifest
         run: |
           IMAGE=${{ needs.build.outputs.image_name }}
+
           docker buildx imagetools create \
             --tag ghcr.io/$IMAGE:latest \
             ghcr.io/$IMAGE:latest-amd64 \
