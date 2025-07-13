@@ -1,117 +1,83 @@
-name: Build and Release Quake2 Binaries (Multi-Arch)
+name: Build and Release Binaries (multi‑arch)
 
 on:
   push:
     branches: [ upstream ]
-    tags:    [ 'QUAKE2_*' ]
+    tags: [ 'QUAKE2_*' ]
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  build-release:
+  build:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        include:
-          - arch: amd64
-            suffix: linux-amd64
-            platform: linux/amd64
-            output: output-amd64
-          - arch: arm64
-            suffix: linux-arm64
-            platform: linux/arm64/v8
-            output: output-arm64
+        arch: [ amd64, arm64 ]
+        suffix: [ linux-amd64, linux-arm64 ]
+        platform: [ linux/amd64, linux/arm64 ]
+    outputs:
+      tag: ${{ env.TAG }}
 
     steps:
-      - name: Checkout upstream
-        uses: actions/checkout@v4
-        with:
-          ref: upstream
-          fetch-depth: 0
+    - name: Checkout upstream
+      uses: actions/checkout@v4
+      with:
+        ref: upstream
+        fetch-depth: 0
 
-      - name: Determine latest QUAKE2_ tag
-        id: get_tag
-        run: |
-          echo "TAG=$(git tag --sort=-creatordate | grep QUAKE2_ | head -n1)" >> $GITHUB_ENV
+    - name: Determine TAG
+      id: tag
+      run: |
+        if [[ "${GITHUB_REF}" == refs/tags/QUAKE2_* ]]; then
+          echo "TAG=${GITHUB_REF##*/}" >> $GITHUB_ENV
+        else
+          TAG=$(git tag --sort=-creatordate | grep '^QUAKE2_' | head -n1)
+          echo "TAG=$TAG" >> $GITHUB_ENV
+        fi
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: all
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+    - name: Set up Buildx
+      uses: docker/setup-buildx-action@v3
 
-      - name: Build Quake2 Binaries for ${{ matrix.arch }}
-        run: |
-          mkdir -p ${{ matrix.output }}
+    - name: Build source for ${{ matrix.arch }}
+      run: |
+        cmake -S . -B build-${{ matrix.arch }} \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_SYSTEM_NAME=Linux \
+          -DCMAKE_SYSTEM_PROCESSOR=${{ matrix.arch }} \
+          -B build-${{ matrix.arch }}
 
-          cat > Dockerfile.build << 'EOF'
-          FROM ubuntu:22.04
-          RUN apt-get update && \
-              DEBIAN_FRONTEND=noninteractive apt-get install -y \
-              build-essential cmake pkg-config zip \
-              libsdl2-dev libsdl2-image-dev \
-              libopenal-dev libcurl4-openssl-dev \
-              libx11-dev libxi-dev libgl1-mesa-dev zlib1g-dev && \
-              rm -rf /var/lib/apt/lists/*
-          WORKDIR /src
-          COPY . .
-          RUN test -f CMakeLists.txt || (echo "Missing CMakeLists.txt!" && false)
-          RUN cmake -S . -B build \
-                -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-                -DCMAKE_INSTALL_PREFIX=/out \
-                -DRUNTIME_OUTPUT_DIRECTORY=build/release && \
-              cmake --build build --parallel && \
-              cmake --install build
-          EOF
+        cmake --build build-${{ matrix.arch }} --parallel
 
-          docker buildx build \
-            --platform ${{ matrix.platform }} \
-            --file Dockerfile.build \
-            --output type=local,dest=${{ matrix.output }} \
-            .
+        mkdir -p output/${{ matrix.suffix }}
+        cp build-${{ matrix.arch }}/quake2 output/${{ matrix.suffix }}/quake2
+        cp build-${{ matrix.arch }}/q2ded  output/${{ matrix.suffix }}/q2ded
+        cp build-${{ matrix.arch }}/ref_*.so output/${{ matrix.suffix }}/ || true
+        mkdir -p output/${{ matrix.suffix }}/baseq2
+        cp build-${{ matrix.arch }}/baseq2/game.so output/${{ matrix.suffix }}/baseq2/ || true
 
-      - name: Show Output Structure
-        run: |
-          echo "==> Files in ${{ matrix.output }}"
-          find ${{ matrix.output }}
+        cp -r output/${{ matrix.suffix }} output/${{ matrix.suffix }}-debug
+        cd output/${{ matrix.suffix }}-debug
+        strip quake2 q2ded ref_*.so || true
+        cd ../..
 
-      - name: Package Debug ZIP
-        run: |
-          OUT=Quake2-${{ matrix.suffix }}-debug
-          mkdir -p $OUT/baseq2
-          cp ${{ matrix.output }}/quake2         $OUT/ || echo "No quake2"
-          cp ${{ matrix.output }}/q2ded          $OUT/ || echo "No q2ded"
-          cp ${{ matrix.output }}/ref_*.so       $OUT/ || echo "No ref_*.so"
-          cp ${{ matrix.output }}/baseq2/game.so $OUT/baseq2/ || echo "No game.so"
-          zip -r quake2-${{ matrix.suffix }}-${{ env.TAG }}-debug.zip $OUT
+        # Create zip artifacts
+        cd output
+        zip -r quake2-${{ matrix.suffix }}-${TAG}.zip "${{ matrix.suffix }}"
+        zip -r quake2-${{ matrix.suffix }}-${TAG}-debug.zip "${{ matrix.suffix }}-debug"
+        cd ..
 
-      - name: Strip & Package Release ZIP
-        run: |
-          OUT=Quake2-${{ matrix.suffix }}
-          mkdir -p $OUT/baseq2
-          cp ${{ matrix.output }}/quake2         $OUT/ || echo "No quake2"
-          cp ${{ matrix.output }}/q2ded          $OUT/ || echo "No q2ded"
-          cp ${{ matrix.output }}/ref_*.so       $OUT/ || echo "No ref_*.so"
-          cp ${{ matrix.output }}/baseq2/game.so $OUT/baseq2/ || echo "No game.so"
-
-          docker run --rm --platform ${{ matrix.platform }} \
-            -v $(pwd)/$OUT:/workspace ubuntu:22.04 \
-            sh -c "apt-get update && apt-get install -y binutils && \
-                   strip /workspace/quake2 /workspace/q2ded /workspace/*.so 2>/dev/null || true"
-
-          zip -r quake2-${{ matrix.suffix }}-${{ env.TAG }}.zip $OUT
-
-      - name: Upload Release Assets
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.TAG }}
-          name: ${{ env.TAG }}
-          files: |
-            quake2-${{ matrix.suffix }}-${{ env.TAG }}.zip
-            quake2-${{ matrix.suffix }}-${{ env.TAG }}-debug.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Upload release assets
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ env.TAG }}
+        name: ${{ env.TAG }}
+        files: |
+          output/quake2-${{ matrix.suffix }}-${{ env.TAG }}.zip
+          output/quake2-${{ matrix.suffix }}-${{ env.TAG }}-debug.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
