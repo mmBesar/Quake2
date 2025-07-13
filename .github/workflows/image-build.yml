@@ -11,38 +11,56 @@ permissions:
   packages: write
 
 jobs:
-  docker:
+  build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+
+    outputs:
+      image_name: ${{ steps.lowercase.outputs.image_name }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           ref: upstream
 
-      - name: Extract tag from ref
-        id: tag
-        run: echo "TAG=${GITHUB_REF##*/}" >> $GITHUB_ENV
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y jq unzip
 
-      - name: Download latest release zip
+      - name: Determine release tag (support tag or latest)
+        id: tag
         run: |
-          curl -L -o quake2.zip https://github.com/${{ github.repository }}/releases/download/$TAG/quake2-linux-amd64-$TAG.zip
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "TAG=${GITHUB_REF##*/}" >> $GITHUB_ENV
+          else
+            TAG=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | jq -r .tag_name)
+            echo "TAG=$TAG" >> $GITHUB_ENV
+
+      - name: Compute lowercase image name
+        id: lowercase
+        run: |
+          IMAGE=$(echo $GITHUB_REPOSITORY | tr '[:upper:]' '[:lower:]')
+          echo "image_name=$IMAGE" >> $GITHUB_OUTPUT
+
+      - name: Download release zip
+        run: |
+          curl -L -o quake2.zip https://github.com/${{ github.repository }}/releases/download/$TAG/quake2-linux-${{ matrix.arch }}-$TAG.zip
           unzip quake2.zip -d quake2
 
       - name: Prepare Docker build context
         run: |
           mv quake2/Quake2 docker-root
-          mkdir -p docker-root/game docker-root/config
+          mkdir -p docker-root/game docker-root/config docker-root/scripts
           cp docker-root/baseq2/* docker-root/game/ || true
           echo 'set dm1 "map q2dm1; set nextmap vstr dm2"' > docker-root/config/maprotation.cfg
 
-      - name: Build Docker image
+      - name: Copy Dockerfile and startup script
         run: |
-          docker build \
-            --build-arg TAG=$TAG \
-            --build-arg ARCH=linux-amd64 \
-            -t ghcr.io/${{ github.repository_owner }}/quake2-server:$TAG \
-            -t ghcr.io/${{ github.repository_owner }}/quake2-server:latest \
-            docker-root
+          curl -sL https://raw.githubusercontent.com/mmBesar/Quake2/main/Dockerfile -o docker-root/Dockerfile
+          curl -sL https://raw.githubusercontent.com/mmBesar/Quake2/main/scripts/start.sh -o docker-root/scripts/start.sh
+          chmod +x docker-root/scripts/start.sh
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -51,7 +69,41 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push Docker image
+      - name: Build & push Docker image
+        uses: docker/build-push-action@v3
+        with:
+          context: ./docker-root
+          push: true
+          tags: |
+            ghcr.io/${{ steps.lowercase.outputs.image_name }}:$TAG-${{ matrix.arch }}
+            ghcr.io/${{ steps.lowercase.outputs.image_name }}:latest-${{ matrix.arch }}
+          build-args: |
+            TAG=$TAG
+            ARCH=linux-${{ matrix.arch }}
+
+  manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch manifest
         run: |
-          docker push ghcr.io/${{ github.repository_owner }}/quake2-server:$TAG
-          docker push ghcr.io/${{ github.repository_owner }}/quake2-server:latest
+          IMAGE=${{ needs.build.outputs.image_name }}
+          docker buildx imagetools create \
+            --tag ghcr.io/$IMAGE:latest \
+            ghcr.io/$IMAGE:latest-amd64 \
+            ghcr.io/$IMAGE:latest-arm64
+
+          docker buildx imagetools create \
+            --tag ghcr.io/$IMAGE:$TAG \
+            ghcr.io/$IMAGE:$TAG-amd64 \
+            ghcr.io/$IMAGE:$TAG-arm64
