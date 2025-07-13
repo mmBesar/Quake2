@@ -14,12 +14,13 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        - arch: amd64
-          suffix: linux-amd64
-          platform: linux/amd64
-        - arch: arm64
-          suffix: linux-arm64
-          platform: linux/arm64
+        include:
+          - arch: amd64
+            suffix: linux-amd64
+            platform: linux/amd64
+          - arch: arm64
+            suffix: linux-arm64
+            platform: linux/arm64
 
     outputs:
       tag: ${{ steps.tag.outputs.TAG }}
