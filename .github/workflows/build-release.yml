@@ -46,10 +46,14 @@ jobs:
             make_arch: linux-aarch64
 
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - name: Fresh clone & checkout upstream
+        run: |
+          rm -rf repo
+          git clone https://github.com/${{ github.repository }} repo
+          cd repo
+          git fetch --tags --force
+          git checkout upstream
+          cd ..
 
       - name: Install host & cross toolchains
         run: |
@@ -67,6 +71,7 @@ jobs:
             libsdl2-dev:arm64 zlib1g-dev:arm64
 
       - name: Build RELEASE & zip
+        working-directory: repo
         run: |
           git clean -fdx
           make BUILD=release \
@@ -75,10 +80,11 @@ jobs:
                CXX=${{ matrix.triple }}-g++
           mkdir -p out
           zip -j \
-            out/quake2-linux-${{ matrix.arch }}-${{ needs.prepare.outputs.tag }}.zip \
+            ../out/quake2-linux-${{ matrix.arch }}-${{ needs.prepare.outputs.tag }}.zip \
             quake2 q2ded ref_*.so baseq2/game.so
 
       - name: Build DEBUG & zip
+        working-directory: repo
         run: |
           git clean -fdx
           make BUILD=debug \
@@ -86,7 +92,7 @@ jobs:
                CC=${{ matrix.triple }}-gcc \
                CXX=${{ matrix.triple }}-g++
           zip -j \
-            out/quake2-linux-${{ matrix.arch }}-${{ needs.prepare.outputs.tag }}-debug.zip \
+            ../out/quake2-linux-${{ matrix.arch }}-${{ needs.prepare.outputs.tag }}-debug.zip \
             quake2 q2ded ref_*.so baseq2/game.so
 
       - name: Upload zips as artifact
