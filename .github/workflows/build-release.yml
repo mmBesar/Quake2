@@ -16,16 +16,13 @@ jobs:
     outputs:
       tag: ${{ steps.get_tag.outputs.latest }}
     steps:
-      - name: Checkout full history
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Force‑fetch tags
-        run: git fetch --tags --force
+      - run: git fetch --tags --force
 
-      - name: Get latest tag
-        id: get_tag
+      - id: get_tag
         run: |
           latest=$(git describe --tags "$(git rev-list --tags --max-count=1)")
           echo "latest=$latest" >> $GITHUB_OUTPUT
@@ -43,11 +40,9 @@ jobs:
             make_arch: linux-aarch64
 
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up QEMU emulation
-        uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v3
 
       - name: Build RELEASE & ZIP in container
         run: |
@@ -58,6 +53,7 @@ jobs:
             -w /src \
             ubuntu:22.04 \
             bash -euxc "
+              git config --global --add safe.directory /src
               apt-get update
               DEBIAN_FRONTEND=noninteractive apt-get install -y \
                 build-essential pkg-config libsdl2-dev zlib1g-dev \
@@ -76,14 +72,14 @@ jobs:
             -w /src \
             ubuntu:22.04 \
             bash -euxc "
+              git config --global --add safe.directory /src
               git clean -fdx
               make BUILD=debug ARCH=${{ matrix.make_arch }}
               zip -j out/quake2-linux-${{ matrix.arch }}-${{ needs.prepare.outputs.tag }}-debug.zip \
                 quake2 q2ded ref_*.so baseq2/game.so
             "
 
-      - name: Upload ZIPs as artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: binaries-${{ matrix.arch }}
           path: out/*.zip
@@ -93,20 +89,17 @@ jobs:
     needs: build
     runs-on: ubuntu-22.04
     steps:
-      - name: Download amd64 artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: binaries-amd64
           path: artifacts/amd64
 
-      - name: Download arm64 artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: binaries-arm64
           path: artifacts/arm64
 
-      - name: Create or update GitHub Release
-        id: create_release
+      - id: create_release
         uses: peter-evans/create-or-update-release@v4
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
@@ -114,8 +107,7 @@ jobs:
           draft: false
           prerelease: false
 
-      - name: Attach all ZIPs
-        uses: actions/upload-release-asset@v1
+      - uses: actions/upload-release-asset@v1
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: |
