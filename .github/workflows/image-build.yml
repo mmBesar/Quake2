@@ -2,9 +2,9 @@ name: Build, Push & Manifest Multi‑Arch Image
 
 on:
   push:
-    branches: [upstream, main]
-  pull_request:
-    branches: [upstream, main]
+    branches: [ upstream, main ]
+    paths-ignore:
+      - 'README.md'
   workflow_dispatch:
 
 permissions:
@@ -15,41 +15,22 @@ jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
-      matrix:
-        arch: [ amd64, arm64 ]
+      matrix: { arch: [amd64, arm64] }
     outputs:
       image_name: ${{ steps.lowercase.outputs.image_name }}
       tag: ${{ env.TAG }}
 
     steps:
-      # 1) Checkout the pure upstream Quake2 source
-      - name: Checkout upstream source
+      - name: Checkout packaging files
         uses: actions/checkout@v4
         with:
-          # public repo: yquake2/yquake2 at master
-          repository: yquake2/yquake2
-          ref: master
-          path: source
-
-      # 2) Checkout your packaging files
-      - name: Checkout packaging
-        uses: actions/checkout@v4
-        with:
-          # your own repo
-          ref: main
+          ref: main          # packaging lives on main
           path: packaging
 
-      # 3) Overlay Dockerfile + start.sh into the source tree
-      - name: Merge packaging into source
-        run: |
-          cp packaging/Dockerfile source/Dockerfile
-          mkdir -p source/scripts
-          cp packaging/scripts/start.sh source/scripts/start.sh
-
-      - name: Install tooling
+      - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Set up QEMU for cross‑builds
+      - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
 
       - name: Set up Docker Buildx
@@ -62,31 +43,28 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Determine release tag (tag or latest)
+      - name: Determine TAG (release or latest)
         id: tag
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             echo "TAG=${GITHUB_REF##*/}" >> $GITHUB_ENV
           else
-            TAG=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
-              https://api.github.com/repos/yquake2/yquake2/releases/latest \
-              | jq -r .tag_name)
+            TAG=$(curl -s https://api.github.com/repos/mmBesar/Quake2/releases/latest \
+                    | jq -r .tag_name)
             echo "TAG=$TAG" >> $GITHUB_ENV
           fi
 
-      - name: Compute lowercase image name
+      - name: Compute image name
         id: lowercase
         run: |
-          IMAGE=$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')
-          echo "image_name=$IMAGE" >> $GITHUB_OUTPUT
+          echo "image_name=$(echo $GITHUB_REPOSITORY | tr '[:upper:]' '[:lower:]')" \
+            >> $GITHUB_OUTPUT
 
       - name: Build & push ${{ matrix.arch }}
         uses: docker/build-push-action@v3
         with:
-          context: source
-          file: source/Dockerfile
+          context: packaging
+          file: packaging/Dockerfile
           platforms: linux/${{ matrix.arch }}
           push: true
           tags: |
@@ -94,8 +72,34 @@ jobs:
             ghcr.io/${{ steps.lowercase.outputs.image_name }}:${{ env.TAG }}-${{ matrix.arch }}
           build-args: |
             TAG=${{ env.TAG }}
-            ARCH=linux-${{ matrix.arch }}
+            ARCH=${{ matrix.arch }}
 
-  # You can drop a separate manifest job if using build-push-action@v3+,
-  # since it will automatically publish a multi-arch manifest under each tag.
-  # If you prefer explicit manifest creation, you can add it back here.
+  manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.build.outputs.tag }}
+
+    steps:
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi‑arch manifest
+        run: |
+          IMAGE=${{ needs.build.outputs.image_name }}
+          docker buildx imagetools create \
+            --tag ghcr.io/$IMAGE:latest \
+            ghcr.io/$IMAGE:latest-amd64 \
+            ghcr.io/$IMAGE:latest-arm64
+
+          docker buildx imagetools create \
+            --tag ghcr.io/$IMAGE:$TAG \
+            ghcr.io/$IMAGE:$TAG-amd64 \
+            ghcr.io/$IMAGE:$TAG-arm64
