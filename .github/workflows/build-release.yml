@@ -2,10 +2,8 @@ name: Build and Release Binaries
 
 on:
   push:
-    branches:
-      - upstream
-    tags:
-      - 'QUAKE2_*'
+    branches: [ upstream ]
+    tags: [ 'QUAKE2_*' ]
   workflow_dispatch:
 
 permissions:
@@ -14,17 +12,16 @@ permissions:
 jobs:
   build-release:
     runs-on: ubuntu-latest
+
     strategy:
       matrix:
         include:
-          # amd64 (Release + Debug via strip)
+          # native amd64
           - arch: x86_64
             suffix: linux-amd64
-            compiler: gcc
-          # arm64 (Release + Debug via strip)
+          # cross‑compile arm64
           - arch: aarch64
             suffix: linux-arm64
-            compiler: aarch64-linux-gnu-gcc
 
     steps:
       - name: Checkout upstream
@@ -39,14 +36,16 @@ jobs:
           TAG=$(git tag --sort=-creatordate | grep QUAKE2_ | head -1)
           echo "TAG=$TAG" >> $GITHUB_ENV
 
-      - name: Install deps & cross‑compiler
+      - name: Install build dependencies
         run: |
           sudo apt-get update
           DEBIAN_FRONTEND=noninteractive sudo apt-get install -y \
-            build-essential cmake pkg-config zip
-
+            build-essential cmake pkg-config zip \
+            libsdl2-dev libsdl2-image-dev \
+            libopenal-dev libcurl4-openssl-dev \
+            libx11-dev libxi-dev libgl1-mesa-dev zlib1g-dev
           if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            # Enable ARM64 architecture and install cross‑tools + ARM64 libs
+            # Register ARM64 and install cross-toolchain + arm64 libs
             sudo dpkg --add-architecture arm64
             sudo apt-get update
             DEBIAN_FRONTEND=noninteractive sudo apt-get install -y \
@@ -55,33 +54,20 @@ jobs:
               libopenal-dev:arm64 libcurl4-openssl-dev:arm64 \
               libx11-dev:arm64 libxi-dev:arm64 \
               libgl1-mesa-dev:arm64 zlib1g-dev:arm64
-          else
-            # Native AMD64 libraries
-            DEBIAN_FRONTEND=noninteractive sudo apt-get install -y \
-              libsdl2-dev libsdl2-image-dev \
-              libopenal-dev libcurl4-openssl-dev \
-              libx11-dev libxi-dev libgl1-mesa-dev zlib1g-dev
+            export CC=aarch64-linux-gnu-gcc
+            export CXX=aarch64-linux-gnu-g++
           fi
 
-      - name: Build yquake2 with debug symbols
+      - name: Build with debug symbols
         run: |
           mkdir build && cd build
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            cmake .. \
-              -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-              -DCMAKE_SYSTEM_NAME=Linux \
-              -DCMAKE_SYSTEM_PROCESSOR=arm64 \
-              -DCMAKE_C_COMPILER=${{ matrix.compiler }} \
-              -DCMAKE_CXX_COMPILER=${{ matrix.compiler/gnu/g++-gnu }} \
-              -DRUNTIME_OUTPUT_DIRECTORY=release
-          else
-            cmake .. \
-              -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-              -DRUNTIME_OUTPUT_DIRECTORY=release
-          fi
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DRUNTIME_OUTPUT_DIRECTORY=release \
+            ${ { matrix.arch == 'aarch64' && '-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=arm64' || '' } }
           make -j$(nproc)
 
-      - name: Package Debug ZIP (with symbols)
+      - name: Package Debug ZIP
         run: |
           OUT=Quake2-${{ matrix.suffix }}-debug
           mkdir -p $OUT/baseq2
@@ -91,7 +77,7 @@ jobs:
           cp build/release/ref_*.so       $OUT/     || true
           zip -r quake2-${{ matrix.suffix }}-${{ env.TAG }}-debug.zip $OUT
 
-      - name: Strip symbols & Package Release ZIP
+      - name: Strip & Package Release ZIP
         run: |
           OUT=Quake2-${{ matrix.suffix }}
           mkdir -p $OUT/baseq2
@@ -99,7 +85,6 @@ jobs:
           cp build/release/q2ded          $OUT/
           cp build/release/baseq2/game.so $OUT/baseq2/ || true
           cp build/release/ref_*.so       $OUT/     || true
-          # strip symbols for release
           strip $OUT/quake2 || true
           strip $OUT/q2ded  || true
           strip $OUT/*.so   || true
