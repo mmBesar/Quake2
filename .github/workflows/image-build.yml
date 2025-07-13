@@ -1,9 +1,18 @@
-name: Build Quake2 Server Docker Image
+name: Build, Push & Manifest Multi-Arch Image
 
 on:
   push:
-    tags:
-      - 'QUAKE2_*'
+    branches:
+      - main
+    paths:
+      - '.github/workflows/image-build.yml'
+      - 'Dockerfile'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/image-build.yml'
+      - 'Dockerfile'
   workflow_dispatch:
 
 permissions:
@@ -24,8 +33,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          ref: upstream
 
       - name: Install tools
         run: sudo apt-get update && sudo apt-get install -y jq unzip
@@ -112,4 +119,3 @@ jobs:
             --tag ghcr.io/$IMAGE:$TAG \
             ghcr.io/$IMAGE:$TAG-amd64 \
             ghcr.io/$IMAGE:$TAG-arm64
-
