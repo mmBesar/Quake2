@@ -1,135 +1,69 @@
-name: Build and Release Binaries
+name: Build Multi-Arch Release
 
 on:
-  push:
-    branches: [ upstream ]
-    tags:    [ 'QUAKE2_*' ]
   workflow_dispatch:
-
-permissions:
-  contents: write
+  push:
+    tags:
+      - 'v*.*.*'
 
 jobs:
-  build-release:
-    strategy:
-      matrix:
-        include:
-          # AMD64 native build
-          - arch: x86_64
-            suffix: linux-amd64
-            runner: ubuntu-latest
-            cc: gcc
-            cxx: g++
-            cmake_args: ""
-          # ARM64 cross-compilation
-          - arch: aarch64
-            suffix: linux-arm64
-            runner: ubuntu-latest
-            cc: aarch64-linux-gnu-gcc
-            cxx: aarch64-linux-gnu-g++
-            cmake_args: "-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++"
-
-    runs-on: ${{ matrix.runner }}
-
+  build-multiarch:
+    runs-on: ubuntu-latest
+    name: Build for amd64 + arm64
     steps:
-      - name: Checkout upstream
+      - name: Checkout source
         uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
         with:
-          ref: upstream
-          fetch-depth: 0
+          platforms: all
 
-      - name: Determine TAG
-        id: tag
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract version from tag
+        id: version
+        run: echo "TAG=${GITHUB_REF##*/}" >> $GITHUB_ENV
+
+      - name: Build release artifacts
         run: |
-          echo "TAG=$(git tag --sort=-creatordate | grep QUAKE2_ | head -1)" >> $GITHUB_ENV
+          mkdir -p out
+          for ARCH in amd64 arm64; do
+            echo "==> Building for $ARCH"
 
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            # ARM64 cross-compilation setup
-            DEBIAN_FRONTEND=noninteractive sudo apt-get install -y \
-              build-essential cmake pkg-config zip \
-              gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
-              libc6-dev-arm64-cross
-            
-            # Configure sources for cross-compilation
-            echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ $(lsb_release -cs) main universe" | sudo tee /etc/apt/sources.list.d/arm64.list
-            echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ $(lsb_release -cs)-updates main universe" | sudo tee -a /etc/apt/sources.list.d/arm64.list
-            echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ $(lsb_release -cs)-security main universe" | sudo tee -a /etc/apt/sources.list.d/arm64.list
-            
-            # Add ARM64 architecture
-            sudo dpkg --add-architecture arm64
-            sudo apt-get update
-            
-            # Install ARM64 libraries
-            DEBIAN_FRONTEND=noninteractive sudo apt-get install -y \
-              libsdl2-dev:arm64 libsdl2-image-dev:arm64 \
-              libopenal-dev:arm64 libcurl4-openssl-dev:arm64 \
-              libx11-dev:arm64 libxi-dev:arm64 libgl1-mesa-dev:arm64 \
-              zlib1g-dev:arm64
-            
-            # Set up pkg-config for cross-compilation
-            echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> $GITHUB_ENV
-            echo "PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" >> $GITHUB_ENV
-          else
-            # AMD64 native build
-            DEBIAN_FRONTEND=noninteractive sudo apt-get install -y \
-              build-essential cmake pkg-config zip \
-              libsdl2-dev libsdl2-image-dev \
-              libopenal-dev libcurl4-openssl-dev \
-              libx11-dev libxi-dev libgl1-mesa-dev zlib1g-dev
-          fi
+            BUILD_DIR=build-$ARCH
+            INSTALL_DIR=Quake2-linux-$ARCH
+            DEBUG_SUFFIX=""
 
-      - name: Build with debug symbols
-        run: |
-          mkdir build && cd build
-          CC=${{ matrix.cc }} CXX=${{ matrix.cxx }} \
-            cmake .. \
-              -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-              -DRUNTIME_OUTPUT_DIRECTORY=release \
-              ${{ matrix.cmake_args }}
-          make -j$(nproc)
+            if [[ "$ARCH" == "amd64" ]]; then
+              CMAKE_ARCH_OPTS=""
+              COMPILER_OPTS=""
+            else
+              CMAKE_ARCH_OPTS="-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=arm64"
+              COMPILER_OPTS="-DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc"
+            fi
 
-      - name: Package Debug ZIP
-        run: |
-          OUT=Quake2-${{ matrix.suffix }}-debug
-          mkdir -p $OUT/baseq2
-          cp build/release/quake2         $OUT/
-          cp build/release/q2ded          $OUT/
-          cp build/release/baseq2/game.so $OUT/baseq2/ || true
-          cp build/release/ref_*.so       $OUT/     || true
-          zip -r quake2-${{ matrix.suffix }}-${{ env.TAG }}-debug.zip $OUT
+            for MODE in Release RelWithDebInfo; do
+              [[ "$MODE" == "RelWithDebInfo" ]] && DEBUG_SUFFIX="-debug"
 
-      - name: Strip & Package Release ZIP
-        run: |
-          OUT=Quake2-${{ matrix.suffix }}
-          mkdir -p $OUT/baseq2
-          cp build/release/quake2         $OUT/
-          cp build/release/q2ded          $OUT/
-          cp build/release/baseq2/game.so $OUT/baseq2/ || true
-          cp build/release/ref_*.so       $OUT/     || true
-          
-          # Use appropriate strip command for each architecture
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            aarch64-linux-gnu-strip $OUT/quake2 || true
-            aarch64-linux-gnu-strip $OUT/q2ded  || true
-            aarch64-linux-gnu-strip $OUT/*.so   || true
-          else
-            strip $OUT/quake2 || true
-            strip $OUT/q2ded  || true
-            strip $OUT/*.so   || true
-          fi
-          
-          zip -r quake2-${{ matrix.suffix }}-${{ env.TAG }}.zip $OUT
+              rm -rf $BUILD_DIR && mkdir $BUILD_DIR
+              cmake -S . -B $BUILD_DIR \
+                -DCMAKE_BUILD_TYPE=$MODE \
+                $CMAKE_ARCH_OPTS \
+                $COMPILER_OPTS \
+                -DRUNTIME_OUTPUT_DIRECTORY=$BUILD_DIR/release
 
-      - name: Upload Release Assets
-        uses: softprops/action-gh-release@v2
+              cmake --build $BUILD_DIR --parallel
+
+              cp -r $BUILD_DIR/release $INSTALL_DIR$DEBUG_SUFFIX
+              zip -r out/quake2-linux-$ARCH-${TAG}${DEBUG_SUFFIX}.zip $INSTALL_DIR$DEBUG_SUFFIX
+              rm -rf $INSTALL_DIR$DEBUG_SUFFIX
+            done
+          done
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ env.TAG }}
-          name:     ${{ env.TAG }}
-          files: |
-            quake2-${{ matrix.suffix }}-${{ env.TAG }}.zip
-            quake2-${{ matrix.suffix }}-${{ env.TAG }}-debug.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: quake2-multiarch-${{ env.TAG }}
+          path: out/*.zip
