@@ -1,16 +1,16 @@
-name: Build and Release Quake2
+name: Build and Release Quake2 Binaries
 
 on:
   push:
-    tags: ['QUAKE2_*']
     branches: [upstream]
+    tags: [QUAKE2_*]
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  build:
+  build-release:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -23,25 +23,25 @@ jobs:
             output: output-arm64
 
     steps:
-      - name: Checkout source
+      - name: Checkout Code
         uses: actions/checkout@v4
         with:
           ref: upstream
           fetch-depth: 0
 
-      - name: Determine tag
-        id: tag
+      - name: Set TAG from Git
         run: |
-          echo "TAG=$(git describe --tags --abbrev=0)" >> $GITHUB_ENV
-          echo "Using tag: $TAG"
+          echo "TAG=$(git tag --sort=-creatordate | grep QUAKE2_ | head -1)" >> $GITHUB_ENV
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
+        with:
+          platforms: all
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build binaries
+      - name: Build Quake2 Binaries for ${{ matrix.arch }}
         run: |
           mkdir -p ${{ matrix.output }}
 
@@ -71,41 +71,36 @@ jobs:
             --platform ${{ matrix.platform }} \
             --file Dockerfile.build \
             --output type=local,dest=${{ matrix.output }} \
-            --build-context .=$(pwd) \
             .
 
-      - name: Show output contents
+      - name: Package Debug ZIP
         run: |
-          echo "==> Output files for ${{ matrix.arch }}"
-          find ${{ matrix.output }}
+          OUT=Quake2-linux-${{ matrix.arch }}-debug
+          mkdir -p $OUT/baseq2
+          cp ${{ matrix.output }}/quake2         $OUT/
+          cp ${{ matrix.output }}/q2ded          $OUT/
+          cp ${{ matrix.output }}/ref_*.so       $OUT/ || true
+          cp ${{ matrix.output }}/baseq2/game.so $OUT/baseq2/ || true
+          zip -r quake2-linux-${{ matrix.arch }}-${{ env.TAG }}-debug.zip $OUT
 
-      - name: Create debug ZIP
+      - name: Strip Binaries & Package Release ZIP
         run: |
-          OUTDIR=Quake2-linux-${{ matrix.arch }}-debug
-          mkdir -p $OUTDIR/baseq2
-          cp ${{ matrix.output }}/quake2 $OUTDIR/ || true
-          cp ${{ matrix.output }}/q2ded $OUTDIR/ || true
-          cp ${{ matrix.output }}/ref_*.so $OUTDIR/ || true
-          cp ${{ matrix.output }}/baseq2/game.so $OUTDIR/baseq2/ || true
-          zip -r quake2-linux-${{ matrix.arch }}-${{ env.TAG }}-debug.zip $OUTDIR
+          OUT=Quake2-linux-${{ matrix.arch }}
+          mkdir -p $OUT/baseq2
+          cp ${{ matrix.output }}/quake2         $OUT/
+          cp ${{ matrix.output }}/q2ded          $OUT/
+          cp ${{ matrix.output }}/ref_*.so       $OUT/ || true
+          cp ${{ matrix.output }}/baseq2/game.so $OUT/baseq2/ || true
 
-      - name: Create stripped release ZIP
-        run: |
-          OUTDIR=Quake2-linux-${{ matrix.arch }}
-          mkdir -p $OUTDIR/baseq2
-          cp ${{ matrix.output }}/quake2 $OUTDIR/ || true
-          cp ${{ matrix.output }}/q2ded $OUTDIR/ || true
-          cp ${{ matrix.output }}/ref_*.so $OUTDIR/ || true
-          cp ${{ matrix.output }}/baseq2/game.so $OUTDIR/baseq2/ || true
-
+          # Strip binaries
           docker run --rm --platform ${{ matrix.platform }} \
-            -v $(pwd)/$OUTDIR:/workspace ubuntu:22.04 \
+            -v $(pwd)/$OUT:/workspace ubuntu:22.04 \
             bash -c "apt-get update && apt-get install -y binutils && \
                      strip /workspace/quake2 /workspace/q2ded /workspace/*.so 2>/dev/null || true"
 
-          zip -r quake2-linux-${{ matrix.arch }}-${{ env.TAG }}.zip $OUTDIR
+          zip -r quake2-linux-${{ matrix.arch }}-${{ env.TAG }}.zip $OUT
 
-      - name: Upload Release
+      - name: Upload ZIPs to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
