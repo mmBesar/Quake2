@@ -19,6 +19,7 @@ jobs:
 
     outputs:
       image_name: ${{ steps.lowercase.outputs.image_name }}
+      tag: ${{ env.TAG }}
 
     steps:
       - name: Checkout code
@@ -99,12 +100,13 @@ jobs:
       - name: Create multi-arch manifest
         run: |
           IMAGE=${{ needs.build.outputs.image_name }}
+          TAG=${{ needs.build.outputs.tag }}
           docker buildx imagetools create \
             --tag ghcr.io/$IMAGE:latest \
             ghcr.io/$IMAGE:latest-amd64 \
             ghcr.io/$IMAGE:latest-arm64
 
           docker buildx imagetools create \
-            --tag ghcr.io/$IMAGE:${{ env.TAG }} \
-            ghcr.io/$IMAGE:${{ env.TAG }}-amd64 \
-            ghcr.io/$IMAGE:${{ env.TAG }}-arm64
+            --tag ghcr.io/$IMAGE:$TAG \
+            ghcr.io/$IMAGE:$TAG-amd64 \
+            ghcr.io/$IMAGE:$TAG-arm64
