@@ -1,6 +1,5 @@
 name: Build & Publish Binaries
 
-# Trigger manually or whenever your sync-upstream job pushes to upstream
 on:
   workflow_dispatch:
   push:
@@ -20,7 +19,7 @@ jobs:
       - name: Checkout upstream branch & tags
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0        # full history & tags
+          fetch-depth: 0
 
       - name: Force‑fetch all tags
         run: |
@@ -55,9 +54,8 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          # host libs & headers
-          sudo apt-get install -y build-essential pkg-config libsdl2-dev zlib1g-dev
-          # arm64 cross‑libs & compiler
+          sudo apt-get install -y \
+            build-essential pkg-config libsdl2-dev zlib1g-dev
           if [ "${{ matrix.arch }}" = "arm64" ]; then
             sudo apt-get install -y \
               gcc-${{ matrix.triple }} \
@@ -90,7 +88,7 @@ jobs:
             quake2 q2ded ref_*.so baseq2/game.so
 
       - name: Upload zips as artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: binaries-${{ matrix.arch }}
           path: out/*.zip
@@ -101,13 +99,13 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Download amd64 artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: binaries-amd64
           path: artifacts/amd64
 
       - name: Download arm64 artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: binaries-arm64
           path: artifacts/arm64
@@ -128,5 +126,5 @@ jobs:
           asset_path: |
             artifacts/amd64/*.zip
             artifacts/arm64/*.zip
-          asset_name: ''            # basename from each path
+          asset_name: ''            # keeps each ZIP’s basename
           asset_content_type: application/zip
