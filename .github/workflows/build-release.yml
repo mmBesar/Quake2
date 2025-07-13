@@ -13,16 +13,35 @@ permissions:
 
 jobs:
   build-release:
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
-          - arch: x86_64
-            runner: ubuntu-latest
-            suffix: linux-amd64
-          - arch: aarch64
-            runner: ubuntu-latest
-            suffix: linux-arm64
+          - arch: amd64
+            container_platform: linux/amd64
+            suffix: amd64
+            cmake_flags: "-DCMAKE_BUILD_TYPE=Release"
+            zip_suffix: "" 
+          - arch: arm64
+            container_platform: linux/arm64
+            suffix: arm64
+            cmake_flags: "-DCMAKE_BUILD_TYPE=Release"
+            zip_suffix: ""
+          - arch: amd64
+            container_platform: linux/amd64
+            suffix: amd64
+            cmake_flags: "-DCMAKE_BUILD_TYPE=RelWithDebInfo"
+            zip_suffix: "-debug"
+          - arch: arm64
+            container_platform: linux/arm64
+            suffix: arm64
+            cmake_flags: "-DCMAKE_BUILD_TYPE=RelWithDebInfo"
+            zip_suffix: "-debug"
+
+    # each step runs inside a container emulating the target platform
+    container:
+      image: ubuntu:22.04
+      platform: ${{ matrix.container_platform }}
 
     steps:
       - name: Checkout upstream branch
@@ -31,102 +50,47 @@ jobs:
           ref: upstream
           fetch-depth: 0
 
-      - name: Set environment tag
+      - name: Set tag
         id: get_tag
         run: |
-          latest_tag=$(git tag --sort=-creatordate | grep QUAKE2_ | head -n 1)
-          echo "Latest tag: $latest_tag"
-          echo "tag_name=$latest_tag" >> $GITHUB_OUTPUT
+          TAG=$(git tag --sort=-creatordate | grep QUAKE2_ | head -n1)
+          echo "TAG=$TAG" >> $GITHUB_ENV
 
-      - name: Install dependencies
-        run: sudo apt update && sudo apt install -y cmake libsdl2-dev libopenal-dev libgl1-mesa-dev libcurl4-openssl-dev
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential cmake pkg-config libsdl2-dev \
+            libsdl2-image-dev libopenal-dev libcurl4-openssl-dev \
+            libx11-dev libxi-dev libgl1-mesa-dev zlib1g-dev zip
 
-      - name: Checkout tag
-        run: git checkout ${{ steps.get_tag.outputs.tag_name }}
-
-      - name: Build yquake2 (Release)
+      - name: Build yquake2
         run: |
           mkdir build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release
+          cmake .. ${{ matrix.cmake_flags }} -DRUNTIME_OUTPUT_DIRECTORY=release
           make -j$(nproc)
 
-      - name: Prepare Quake2 directory (Release)
+      - name: Prepare Quake2 directory
         run: |
-          mkdir -p Quake2/baseq2
-          cp build/release/quake2 Quake2/
-          cp build/release/q2ded Quake2/
-          cp build/release/baseq2/game.so Quake2/baseq2/ || true
-          cp build/release/ref_*.so Quake2/ || true
+          # flatten into a single directory and rename for arch+mode
+          DIR=Quake2-${{ matrix.suffix }}${{ matrix.zip_suffix }}
+          mkdir -p $DIR/baseq2
+          cp build/release/quake2        $DIR/
+          cp build/release/q2ded         $DIR/
+          cp build/release/baseq2/game.so $DIR/baseq2/ || true
+          cp build/release/ref_*.so      $DIR/ || true
 
-      - name: Zip release (Release)
+      - name: Zip release
         run: |
-          zip -r quake2-${{ matrix.suffix }}-${{ steps.get_tag.outputs.tag_name }}.zip Quake2
+          zip -r quake2-linux-${{ matrix.suffix }}-${{ env.TAG }}${{ matrix.zip_suffix }}.zip \
+              Quake2-${{ matrix.suffix }}${{ matrix.zip_suffix }}
 
-      - name: Upload release (Release)
+      - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.get_tag.outputs.tag_name }}
-          name: ${{ steps.get_tag.outputs.tag_name }}
-          files: quake2-${{ matrix.suffix }}-${{ steps.get_tag.outputs.tag_name }}.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  build-debug:
-    runs-on: ${{ matrix.runner }}
-    needs: build-release
-    strategy:
-      matrix:
-        include:
-          - arch: x86_64
-            runner: ubuntu-latest
-            suffix: linux-amd64
-          - arch: aarch64
-            runner: ubuntu-latest
-            suffix: linux-arm64
-
-    steps:
-      - name: Checkout upstream branch
-        uses: actions/checkout@v4
-        with:
-          ref: upstream
-          fetch-depth: 0
-
-      - name: Set environment tag
-        id: get_tag
-        run: |
-          latest_tag=$(git tag --sort=-creatordate | grep QUAKE2_ | head -n 1)
-          echo "Latest tag: $latest_tag"
-          echo "tag_name=$latest_tag" >> $GITHUB_OUTPUT
-
-      - name: Install dependencies
-        run: sudo apt update && sudo apt install -y cmake libsdl2-dev libopenal-dev libgl1-mesa-dev libcurl4-openssl-dev
-
-      - name: Checkout tag
-        run: git checkout ${{ steps.get_tag.outputs.tag_name }}
-
-      - name: Build yquake2 (Debug)
-        run: |
-          mkdir build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo
-          make -j$(nproc)
-
-      - name: Prepare Quake2 directory (Debug)
-        run: |
-          mkdir -p Quake2/baseq2
-          cp build/release/quake2 Quake2/
-          cp build/release/q2ded Quake2/
-          cp build/release/baseq2/game.so Quake2/baseq2/ || true
-          cp build/release/ref_*.so Quake2/ || true
-
-      - name: Zip release (Debug)
-        run: |
-          zip -r quake2-${{ matrix.suffix }}-${{ steps.get_tag.outputs.tag_name }}-debug.zip Quake2
-
-      - name: Upload release (Debug)
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.get_tag.outputs.tag_name }}
-          name: ${{ steps.get_tag.outputs.tag_name }}
-          files: quake2-${{ matrix.suffix }}-${{ steps.get_tag.outputs.tag_name }}-debug.zip
+          tag_name: ${{ env.TAG }}
+          name: ${{ env.TAG }}
+          files: >
+            quake2-linux-${{ matrix.suffix }}-${{ env.TAG }}${{ matrix.zip_suffix }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
