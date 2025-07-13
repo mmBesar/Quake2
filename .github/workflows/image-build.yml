@@ -2,22 +2,9 @@ name: Build, Push & Manifest Multi‑Arch Image
 
 on:
   push:
-    # 1) All pushes to upstream
-    - branches: [ upstream ]
-    # 2) Only specific paths on main
-    - branches: [ main ]
-      paths:
-        - '.github/workflows/image-build.yml'
-        - 'Dockerfile'
-        - 'scripts/start.sh'
+    branches: [upstream, main]
   pull_request:
-    # Same for PRs
-    - branches: [ upstream ]
-    - branches: [ main ]
-      paths:
-        - '.github/workflows/image-build.yml'
-        - 'Dockerfile'
-        - 'scripts/start.sh'
+    branches: [upstream, main]
   workflow_dispatch:
 
 permissions:
@@ -29,16 +16,15 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [ amd64, arm64 ]
+        arch: [amd64, arm64]
     outputs:
       image_name: ${{ steps.lowercase.outputs.image_name }}
       tag: ${{ env.TAG }}
 
     steps:
-      - name: Checkout code
+      - name: Checkout upstream branch
         uses: actions/checkout@v4
         with:
-          # Always build from the upstream branch (even when triggered on main)
           ref: upstream
 
       - name: Install tooling
