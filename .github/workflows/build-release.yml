@@ -11,18 +11,23 @@ permissions:
 
 jobs:
   build-release:
-    runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
+          # 1) amd64 on an AMD64 runner
           - arch: x86_64
             suffix: linux-amd64
+            runner: ubuntu-latest
             cc: gcc
             cxx: g++
+          # 2) arm64 on a real ARM64 runner
           - arch: aarch64
             suffix: linux-arm64
-            cc: aarch64-linux-gnu-gcc
-            cxx: aarch64-linux-gnu-g++
+            runner: ubuntu-22.04-arm64
+            cc: gcc
+            cxx: g++
+
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - name: Checkout upstream
@@ -34,17 +39,7 @@ jobs:
       - name: Determine TAG
         id: tag
         run: |
-          TAG=$(git tag --sort=-creatordate | grep QUAKE2_ | head -1)
-          echo "TAG=$TAG" >> $GITHUB_ENV
-
-      - name: Fix ARM64 apt sources
-        if: matrix.arch == 'aarch64'
-        run: |
-          # Comment out any problematic lines in ALL sources.list files
-          sudo find /etc/apt -type f -name "*.list" \
-            -exec sed -i -e '/security.ubuntu.com/ s/^/#/' \
-                         -e '/packages.microsoft.com/ s/^/#/' \
-                         -e '/azure.archive.ubuntu.com/ s/noble/jammy/g' {} +
+          echo "TAG=$(git tag --sort=-creatordate | grep QUAKE2_ | head -1)" >> $GITHUB_ENV
 
       - name: Install build dependencies
         run: |
@@ -54,18 +49,6 @@ jobs:
             libsdl2-dev libsdl2-image-dev \
             libopenal-dev libcurl4-openssl-dev \
             libx11-dev libxi-dev libgl1-mesa-dev zlib1g-dev
-
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            # Register ARM64 and install ARM64 dev‑libs
-            sudo dpkg --add-architecture arm64
-            sudo apt-get update
-            DEBIAN_FRONTEND=noninteractive sudo apt-get install -y \
-              gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
-              libsdl2-dev:arm64 libsdl2-image-dev:arm64 \
-              libopenal-dev:arm64 libcurl4-openssl-dev:arm64 \
-              libx11-dev:arm64 libxi-dev:arm64 \
-              libgl1-mesa-dev:arm64 zlib1g-dev:arm64
-          fi
 
       - name: Build with debug symbols
         run: |
