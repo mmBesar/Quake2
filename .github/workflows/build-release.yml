@@ -1,4 +1,4 @@
-name: Build & Publish Binaries
+name: Build & Publish yquake2 Binaries
 
 on:
   workflow_dispatch:
@@ -39,9 +39,14 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libsdl2-dev zlib1g-dev
+          sudo apt-get install -y \
+            build-essential pkg-config libsdl2-dev zlib1g-dev \
+            libsdl2-dev:arm64 zlib1g-dev:arm64
           if [ "${{ matrix.arch }}" = "arm64" ]; then
-            sudo apt-get install -y gcc-${{ matrix.triple }} g++-${{ matrix.triple }} binutils-${{ matrix.triple }}
+            sudo apt-get install -y \
+              gcc-${{ matrix.triple }} \
+              g++-${{ matrix.triple }} \
+              binutils-${{ matrix.triple }}
           fi
 
       - name: Build RELEASE & ZIP
@@ -65,7 +70,7 @@ jobs:
 
       - name: Create or update GitHub Release
         id: create_release
-        uses: peter-evans/create-or-update-release@v3
+        uses: peter-evans/create-or-update-release@v4
         with:
           tag_name: ${{ steps.get_tag.outputs.latest }}
           release_name: ${{ steps.get_tag.outputs.latest }}
@@ -77,5 +82,5 @@ jobs:
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: out/*.zip
-          asset_name: ''           # uses the file’s basename
+          asset_name: ''           # will default to each ZIP’s basename
           asset_content_type: application/zip
