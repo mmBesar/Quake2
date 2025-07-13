@@ -37,11 +37,16 @@ jobs:
           TAG=$(git tag --sort=-creatordate | grep QUAKE2_ | head -1)
           echo "TAG=$TAG" >> $GITHUB_ENV
 
-      - name: Remap ARM64 sources to jammy
+      - name: Fix ARM64 apt sources
         if: matrix.arch == 'aarch64'
         run: |
-          # Runner is Ubuntu 24.04 ("noble") but its arm64 security repos are missing.
-          sudo sed -i 's/noble/jammy/g' /etc/apt/sources.list
+          # Comment out every security.ubuntu.com entry
+          sudo find /etc/apt -type f -name "*.list" \
+            -exec sed -i '/security.ubuntu.com/ s/^/#/' {} +
+
+          # Remap noble → jammy everywhere
+          sudo find /etc/apt -type f -name "*.list" \
+            -exec sed -i 's/noble/jammy/g' {} +
 
       - name: Install build dependencies
         run: |
@@ -67,10 +72,10 @@ jobs:
         run: |
           mkdir build && cd build
           CC=${{ matrix.cc }} CXX=${{ matrix.cxx }} \
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DRUNTIME_OUTPUT_DIRECTORY=release \
-            $( [ "${{ matrix.arch }}" = "aarch64" ] && echo "-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=arm64" )
+            cmake .. \
+              -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+              -DRUNTIME_OUTPUT_DIRECTORY=release \
+              $( [ "${{ matrix.arch }}" = "aarch64" ] && echo "-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=arm64" )
           make -j$(nproc)
 
       - name: Package Debug ZIP
