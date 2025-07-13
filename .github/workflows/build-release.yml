@@ -64,39 +64,67 @@ jobs:
                 -DRUNTIME_OUTPUT_DIRECTORY=release && \
               make -j$(nproc)
           
-          RUN mkdir -p /output/build && \
-              cp -r build/release /output/build/
+          # Copy built files to output directory
+          RUN mkdir -p /output && \
+              find build -name "quake2" -type f -exec cp {} /output/ \; && \
+              find build -name "q2ded" -type f -exec cp {} /output/ \; && \
+              find build -name "game.so" -type f -exec cp {} /output/ \; && \
+              find build -name "ref_*.so" -type f -exec cp {} /output/ \; && \
+              ls -la /output/
           EOF
           
           docker buildx build \
             --platform ${{ matrix.platform }} \
             --output type=local,dest=./output \
             .
+          
+          # Debug: show what was actually built
+          echo "Contents of output directory:"
+          find output -type f -ls || true
 
       - name: Package Debug ZIP
         run: |
           OUT=Quake2-${{ matrix.suffix }}-debug
           mkdir -p $OUT/baseq2
-          cp output/build/release/quake2         $OUT/
-          cp output/build/release/q2ded          $OUT/
-          cp output/build/release/baseq2/game.so $OUT/baseq2/ || true
-          cp output/build/release/ref_*.so       $OUT/     || true
+          
+          # Copy files if they exist
+          [ -f output/quake2 ] && cp output/quake2 $OUT/
+          [ -f output/q2ded ] && cp output/q2ded $OUT/
+          [ -f output/game.so ] && cp output/game.so $OUT/baseq2/
+          for ref_file in output/ref_*.so; do
+            [ -f "$ref_file" ] && cp "$ref_file" $OUT/
+          done
+          
+          # Check what we actually have
+          echo "Debug package contents:"
+          find $OUT -type f -ls || true
+          
           zip -r quake2-${{ matrix.suffix }}-${{ env.TAG }}-debug.zip $OUT
 
       - name: Strip & Package Release ZIP
         run: |
           OUT=Quake2-${{ matrix.suffix }}
           mkdir -p $OUT/baseq2
-          cp output/build/release/quake2         $OUT/
-          cp output/build/release/q2ded          $OUT/
-          cp output/build/release/baseq2/game.so $OUT/baseq2/ || true
-          cp output/build/release/ref_*.so       $OUT/     || true
+          
+          # Copy files if they exist
+          [ -f output/quake2 ] && cp output/quake2 $OUT/
+          [ -f output/q2ded ] && cp output/q2ded $OUT/
+          [ -f output/game.so ] && cp output/game.so $OUT/baseq2/
+          for ref_file in output/ref_*.so; do
+            [ -f "$ref_file" ] && cp "$ref_file" $OUT/
+          done
           
           # Strip binaries - Docker strips work across architectures
-          docker run --rm --platform ${{ matrix.platform }} \
-            -v $(pwd)/$OUT:/workspace ubuntu:22.04 \
-            sh -c "apt-get update && apt-get install -y binutils && \
-                   strip /workspace/quake2 /workspace/q2ded /workspace/*.so 2>/dev/null || true"
+          if [ -f $OUT/quake2 ] || [ -f $OUT/q2ded ] || [ -f $OUT/*.so ]; then
+            docker run --rm --platform ${{ matrix.platform }} \
+              -v $(pwd)/$OUT:/workspace ubuntu:22.04 \
+              sh -c "apt-get update && apt-get install -y binutils && \
+                     strip /workspace/quake2 /workspace/q2ded /workspace/*.so 2>/dev/null || true"
+          fi
+          
+          # Check what we actually have
+          echo "Release package contents:"
+          find $OUT -type f -ls || true
           
           zip -r quake2-${{ matrix.suffix }}-${{ env.TAG }}.zip $OUT
 
