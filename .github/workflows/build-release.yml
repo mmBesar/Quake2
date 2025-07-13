@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - upstream
+      - main  # change this if your dev branch is named differently
 
 permissions:
   contents: write
@@ -23,12 +23,13 @@ jobs:
       - run: git fetch --tags --force
 
       - id: get_tag
+        shell: bash
         run: |
           latest=$(git describe --tags "$(git rev-list --tags --max-count=1)")
           echo "latest=$latest" >> $GITHUB_OUTPUT
 
   build:
-    name: Cross‑compile & ZIP
+    name: Cross-compile & ZIP
     needs: prepare
     runs-on: ubuntu-22.04
     strategy:
@@ -47,28 +48,35 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Debug – Check files
+        run: |
+          echo "Branch: ${{ github.ref }}"
+          echo "Commit: ${{ github.sha }}"
+          ls -l
+          test -f Makefile || (echo "❌ Makefile not found. Are you on the right branch?" && exit 1)
+
       - name: Install host (amd64) deps
+        if: ${{ matrix.arch == 'amd64' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             build-essential pkg-config libsdl2-dev zlib1g-dev
 
-      - name: Enable arm64 multi‑arch & add ports.ubuntu.com
+      - name: Enable arm64 multi‑arch & install cross-deps
         if: ${{ matrix.arch == 'arm64' }}
         run: |
           sudo dpkg --add-architecture arm64
-          cat <<EOF | sudo tee /etc/apt/sources.list.d/arm64-ports.list
-          deb [arch=arm64] http://ports.ubuntu.com/ jammy main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ jammy-updates main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ jammy-security main restricted universe multiverse
-          EOF
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/arm64-ports.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ jammy-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
           sudo apt-get update
           sudo apt-get install -y \
             gcc-${{ matrix.triple }} \
             g++-${{ matrix.triple }} \
             binutils-${{ matrix.triple }} \
             libsdl2-dev:arm64 \
-            zlib1g-dev:arm64
+            zlib1g-dev:arm64 \
+            zip pkg-config
 
       - name: Build RELEASE & zip
         run: |
@@ -99,20 +107,23 @@ jobs:
 
   release:
     name: Create or Update GitHub Release
-    needs: build
+    needs: [prepare, build]
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Download amd64 artifacts
+        uses: actions/download-artifact@v4
         with:
           name: binaries-amd64
           path: artifacts/amd64
 
-      - uses: actions/download-artifact@v4
+      - name: Download arm64 artifacts
+        uses: actions/download-artifact@v4
         with:
           name: binaries-arm64
           path: artifacts/arm64
 
-      - id: create_release
+      - name: Create GitHub release
+        id: create_release
         uses: peter-evans/create-or-update-release@v4
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
@@ -120,11 +131,9 @@ jobs:
           draft: false
           prerelease: false
 
-      - uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: |
-            artifacts/amd64/*.zip
-            artifacts/arm64/*.zip
-          asset_name: ''
-          asset_content_type: application/zip
+      - name: Upload ZIPs to release
+        run: |
+          gh release upload ${{ needs.prepare.outputs.tag }} \
+            artifacts/amd64/*.zip artifacts/arm64/*.zip --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
