@@ -3,8 +3,7 @@ name: Build & Publish Binaries
 on:
   workflow_dispatch:
   push:
-    branches:
-      - upstream
+    branches: [ upstream ]
 
 permissions:
   contents: write
@@ -29,7 +28,7 @@ jobs:
           echo "latest=$latest" >> $GITHUB_OUTPUT
 
   build:
-    name: Cross-compile & ZIP
+    name: Build ${{ matrix.arch }}
     needs: prepare
     runs-on: ubuntu-22.04
     strategy:
@@ -38,9 +37,11 @@ jobs:
           - arch: amd64
             triple: x86_64-linux-gnu
             make_arch: linux-x86_64
+            packages: build-essential pkg-config libsdl2-dev zlib1g-dev
           - arch: arm64
             triple: aarch64-linux-gnu
             make_arch: linux-aarch64
+            packages: gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu libsdl2-dev:arm64 zlib1g-dev:arm64
 
     steps:
       - name: Checkout source
@@ -49,30 +50,20 @@ jobs:
           fetch-depth: 0
           ref: upstream
 
-      - name: Install native deps for amd64
-        if: ${{ matrix.arch == 'amd64' }}
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential pkg-config libsdl2-dev zlib1g-dev zip
-
-      - name: Enable arm64 multiarch and install deps
+      - name: Enable arm64 apt sources (if needed)
         if: ${{ matrix.arch == 'arm64' }}
         run: |
           sudo dpkg --add-architecture arm64
           echo "deb [arch=arm64] http://ports.ubuntu.com/ jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/arm64-ports.list
           echo "deb [arch=arm64] http://ports.ubuntu.com/ jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
           echo "deb [arch=arm64] http://ports.ubuntu.com/ jammy-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
-          sudo apt-get update
-          sudo apt-get install -y \
-            gcc-${{ matrix.triple }} \
-            g++-${{ matrix.triple }} \
-            binutils-${{ matrix.triple }} \
-            libsdl2-dev:arm64 \
-            zlib1g-dev:arm64 \
-            zip pkg-config
 
-      - name: Build RELEASE
+      - name: Install ${{ matrix.arch }} dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.packages }} zip
+
+      - name: Build RELEASE & zip
         run: |
           git clean -fdx
           make BUILD=release \
@@ -83,7 +74,7 @@ jobs:
           zip -j out/quake2-linux-${{ matrix.arch }}-${{ needs.prepare.outputs.tag }}.zip \
             quake2 q2ded ref_*.so baseq2/game.so
 
-      - name: Build DEBUG
+      - name: Build DEBUG & zip
         run: |
           git clean -fdx
           make BUILD=debug \
@@ -93,15 +84,15 @@ jobs:
           zip -j out/quake2-linux-${{ matrix.arch }}-${{ needs.prepare.outputs.tag }}-debug.zip \
             quake2 q2ded ref_*.so baseq2/game.so
 
-      - name: Upload ZIPs as artifacts
+      - name: Upload ZIPs
         uses: actions/upload-artifact@v4
         with:
           name: binaries-${{ matrix.arch }}
           path: out/*.zip
 
   release:
-    name: Publish Release
-    needs: [prepare, build]
+    name: GitHub Release
+    needs: build
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/download-artifact@v4
@@ -114,10 +105,17 @@ jobs:
           name: binaries-arm64
           path: artifacts/arm64
 
-      - id: release
-        uses: softprops/action-gh-release@v2
+      - id: create_release
+        uses: peter-evans/create-or-update-release@v4
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
+          release_name: ${{ needs.prepare.outputs.tag }}
+          draft: false
+          prerelease: false
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
           files: |
             artifacts/amd64/*.zip
             artifacts/arm64/*.zip
