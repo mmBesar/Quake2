@@ -1,5 +1,6 @@
-name: Build & Publish yquake2 Binaries
+name: Build & Publish Binaries
 
+# Trigger manually or whenever your sync-upstream job pushes to upstream
 on:
   workflow_dispatch:
   push:
@@ -10,8 +11,30 @@ permissions:
   contents: write
 
 jobs:
+  prepare:
+    name: Prepare & Get Tag
+    runs-on: ubuntu-22.04
+    outputs:
+      tag: ${{ steps.get_tag.outputs.latest }}
+    steps:
+      - name: Checkout upstream branch & tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # full history & tags
+
+      - name: Force‑fetch all tags
+        run: |
+          git fetch --tags --force
+
+      - name: Determine latest tag
+        id: get_tag
+        run: |
+          latest=$(git describe --tags "$(git rev-list --tags --max-count=1)")
+          echo "latest=$latest" >> $GITHUB_OUTPUT
+
   build:
-    name: Build & Publish Binaries
+    name: Cross‑compile & ZIP
+    needs: prepare
     runs-on: ubuntu-22.04
     strategy:
       matrix:
@@ -24,63 +47,86 @@ jobs:
             make_arch: linux-aarch64
 
     steps:
-      - name: Checkout full history & tags
+      - name: Checkout source
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Determine latest upstream tag
-        id: get_tag
-        run: |
-          git fetch --tags
-          latest=$(git describe --tags "$(git rev-list --tags --max-count=1)")
-          echo "latest=$latest" >> $GITHUB_OUTPUT
-
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential pkg-config libsdl2-dev zlib1g-dev \
-            libsdl2-dev:arm64 zlib1g-dev:arm64
+          # host libs & headers
+          sudo apt-get install -y build-essential pkg-config libsdl2-dev zlib1g-dev
+          # arm64 cross‑libs & compiler
           if [ "${{ matrix.arch }}" = "arm64" ]; then
             sudo apt-get install -y \
               gcc-${{ matrix.triple }} \
               g++-${{ matrix.triple }} \
-              binutils-${{ matrix.triple }}
+              binutils-${{ matrix.triple }} \
+              libsdl2-dev:arm64 zlib1g-dev:arm64
           fi
 
-      - name: Build RELEASE & ZIP
+      - name: Build RELEASE & zip
         run: |
           make clean
-          make BUILD=release ARCH=${{ matrix.make_arch }} \
+          make BUILD=release \
+               ARCH=${{ matrix.make_arch }} \
                CC=${{ matrix.triple }}-gcc \
                CXX=${{ matrix.triple }}-g++
           mkdir -p out
-          zip -j out/quake2-linux-${{ matrix.arch }}-${{ steps.get_tag.outputs.latest }}.zip \
+          zip -j \
+            out/quake2-linux-${{ matrix.arch }}-${{ needs.prepare.outputs.tag }}.zip \
             quake2 q2ded ref_*.so baseq2/game.so
 
-      - name: Build DEBUG & ZIP
+      - name: Build DEBUG & zip
         run: |
           make clean
-          make BUILD=debug ARCH=${{ matrix.make_arch }} \
+          make BUILD=debug \
+               ARCH=${{ matrix.make_arch }} \
                CC=${{ matrix.triple }}-gcc \
                CXX=${{ matrix.triple }}-g++
-          zip -j out/quake2-linux-${{ matrix.arch }}-${{ steps.get_tag.outputs.latest }}-debug.zip \
+          zip -j \
+            out/quake2-linux-${{ matrix.arch }}-${{ needs.prepare.outputs.tag }}-debug.zip \
             quake2 q2ded ref_*.so baseq2/game.so
+
+      - name: Upload zips as artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: binaries-${{ matrix.arch }}
+          path: out/*.zip
+
+  release:
+    name: Create/Update Release & Attach
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download amd64 artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: binaries-amd64
+          path: artifacts/amd64
+
+      - name: Download arm64 artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: binaries-arm64
+          path: artifacts/arm64
 
       - name: Create or update GitHub Release
         id: create_release
         uses: peter-evans/create-or-update-release@v4
         with:
-          tag_name: ${{ steps.get_tag.outputs.latest }}
-          release_name: ${{ steps.get_tag.outputs.latest }}
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          release_name: ${{ needs.prepare.outputs.tag }}
           draft: false
           prerelease: false
 
-      - name: Upload release assets
+      - name: Attach all ZIPs
         uses: actions/upload-release-asset@v1
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: out/*.zip
-          asset_name: ''           # will default to each ZIP’s basename
+          asset_path: |
+            artifacts/amd64/*.zip
+            artifacts/arm64/*.zip
+          asset_name: ''            # basename from each path
           asset_content_type: application/zip
