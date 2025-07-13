@@ -3,8 +3,7 @@ name: Build & Publish Binaries
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main  # change this if your dev branch is named differently
+    branches: [ upstream ]
 
 permissions:
   contents: write
@@ -19,17 +18,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: upstream
 
       - run: git fetch --tags --force
 
       - id: get_tag
-        shell: bash
         run: |
           latest=$(git describe --tags "$(git rev-list --tags --max-count=1)")
           echo "latest=$latest" >> $GITHUB_OUTPUT
 
   build:
-    name: Cross-compile & ZIP
+    name: Build ${{ matrix.arch }}
     needs: prepare
     runs-on: ubuntu-22.04
     strategy:
@@ -38,45 +37,31 @@ jobs:
           - arch: amd64
             triple: x86_64-linux-gnu
             make_arch: linux-x86_64
+            packages: build-essential pkg-config libsdl2-dev zlib1g-dev
           - arch: arm64
             triple: aarch64-linux-gnu
             make_arch: linux-aarch64
+            packages: gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu libsdl2-dev:arm64 zlib1g-dev:arm64
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: upstream
 
-      - name: Debug – Check files
-        run: |
-          echo "Branch: ${{ github.ref }}"
-          echo "Commit: ${{ github.sha }}"
-          ls -l
-          test -f Makefile || (echo "❌ Makefile not found. Are you on the right branch?" && exit 1)
-
-      - name: Install host (amd64) deps
-        if: ${{ matrix.arch == 'amd64' }}
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential pkg-config libsdl2-dev zlib1g-dev
-
-      - name: Enable arm64 multi‑arch & install cross-deps
+      - name: Enable arm64 apt sources (if needed)
         if: ${{ matrix.arch == 'arm64' }}
         run: |
           sudo dpkg --add-architecture arm64
           echo "deb [arch=arm64] http://ports.ubuntu.com/ jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/arm64-ports.list
           echo "deb [arch=arm64] http://ports.ubuntu.com/ jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
           echo "deb [arch=arm64] http://ports.ubuntu.com/ jammy-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
+
+      - name: Install ${{ matrix.arch }} dependencies
+        run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            gcc-${{ matrix.triple }} \
-            g++-${{ matrix.triple }} \
-            binutils-${{ matrix.triple }} \
-            libsdl2-dev:arm64 \
-            zlib1g-dev:arm64 \
-            zip pkg-config
+          sudo apt-get install -y ${{ matrix.packages }} zip
 
       - name: Build RELEASE & zip
         run: |
@@ -99,31 +84,28 @@ jobs:
           zip -j out/quake2-linux-${{ matrix.arch }}-${{ needs.prepare.outputs.tag }}-debug.zip \
             quake2 q2ded ref_*.so baseq2/game.so
 
-      - name: Upload ZIPs as artifact
+      - name: Upload ZIPs
         uses: actions/upload-artifact@v4
         with:
           name: binaries-${{ matrix.arch }}
           path: out/*.zip
 
   release:
-    name: Create or Update GitHub Release
-    needs: [prepare, build]
+    name: GitHub Release
+    needs: build
     runs-on: ubuntu-22.04
     steps:
-      - name: Download amd64 artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: binaries-amd64
           path: artifacts/amd64
 
-      - name: Download arm64 artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: binaries-arm64
           path: artifacts/arm64
 
-      - name: Create GitHub release
-        id: create_release
+      - id: create_release
         uses: peter-evans/create-or-update-release@v4
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
@@ -131,9 +113,9 @@ jobs:
           draft: false
           prerelease: false
 
-      - name: Upload ZIPs to release
-        run: |
-          gh release upload ${{ needs.prepare.outputs.tag }} \
-            artifacts/amd64/*.zip artifacts/arm64/*.zip --clobber
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/amd64/*.zip
+            artifacts/arm64/*.zip
