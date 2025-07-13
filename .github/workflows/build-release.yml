@@ -64,13 +64,10 @@ jobs:
                 -DRUNTIME_OUTPUT_DIRECTORY=release && \
               make -j$(nproc)
           
-          # Copy built files to output directory
-          RUN mkdir -p /output && \
-              find build -name "quake2" -type f -exec cp {} /output/ \; && \
-              find build -name "q2ded" -type f -exec cp {} /output/ \; && \
-              find build -name "game.so" -type f -exec cp {} /output/ \; && \
-              find build -name "ref_*.so" -type f -exec cp {} /output/ \; && \
-              ls -la /output/
+          # Create output structure and copy files
+          RUN mkdir -p /output/release && \
+              ls -la build/release/ && \
+              cp -r build/release/* /output/release/ || true
           EOF
           
           docker buildx build \
@@ -78,26 +75,29 @@ jobs:
             --output type=local,dest=./output \
             .
           
-          # Debug: show what was actually built
-          echo "Contents of output directory:"
-          find output -type f -ls || true
+          # Debug: Show what was actually built
+          echo "=== Docker build output structure ==="
+          find output -type f -name "*" | head -20
 
       - name: Package Debug ZIP
         run: |
+          # Debug: Show what files we actually have
+          echo "=== Available files ==="
+          find output -type f -name "*" | head -20
+          
+          # Create debug package structure
           OUT=Quake2-${{ matrix.suffix }}-debug
           mkdir -p $OUT/baseq2
           
-          # Copy files if they exist
-          [ -f output/quake2 ] && cp output/quake2 $OUT/
-          [ -f output/q2ded ] && cp output/q2ded $OUT/
-          [ -f output/game.so ] && cp output/game.so $OUT/baseq2/
-          for ref_file in output/ref_*.so; do
-            [ -f "$ref_file" ] && cp "$ref_file" $OUT/
-          done
+          # Copy files from the output directory
+          cp output/release/quake2         $OUT/ || (echo "quake2 not found, listing files:" && ls -la output/release/)
+          cp output/release/q2ded          $OUT/ || (echo "q2ded not found")
+          cp output/release/baseq2/game.so $OUT/baseq2/ || (echo "game.so not found")
+          cp output/release/ref_*.so       $OUT/ || (echo "ref_*.so not found")
           
-          # Check what we actually have
-          echo "Debug package contents:"
-          find $OUT -type f -ls || true
+          # Show final structure
+          echo "=== Debug package structure ==="
+          find $OUT -type f
           
           zip -r quake2-${{ matrix.suffix }}-${{ env.TAG }}-debug.zip $OUT
 
@@ -105,26 +105,16 @@ jobs:
         run: |
           OUT=Quake2-${{ matrix.suffix }}
           mkdir -p $OUT/baseq2
-          
-          # Copy files if they exist
-          [ -f output/quake2 ] && cp output/quake2 $OUT/
-          [ -f output/q2ded ] && cp output/q2ded $OUT/
-          [ -f output/game.so ] && cp output/game.so $OUT/baseq2/
-          for ref_file in output/ref_*.so; do
-            [ -f "$ref_file" ] && cp "$ref_file" $OUT/
-          done
+          cp output/build/release/quake2         $OUT/
+          cp output/build/release/q2ded          $OUT/
+          cp output/build/release/baseq2/game.so $OUT/baseq2/ || true
+          cp output/build/release/ref_*.so       $OUT/     || true
           
           # Strip binaries - Docker strips work across architectures
-          if [ -f $OUT/quake2 ] || [ -f $OUT/q2ded ] || [ -f $OUT/*.so ]; then
-            docker run --rm --platform ${{ matrix.platform }} \
-              -v $(pwd)/$OUT:/workspace ubuntu:22.04 \
-              sh -c "apt-get update && apt-get install -y binutils && \
-                     strip /workspace/quake2 /workspace/q2ded /workspace/*.so 2>/dev/null || true"
-          fi
-          
-          # Check what we actually have
-          echo "Release package contents:"
-          find $OUT -type f -ls || true
+          docker run --rm --platform ${{ matrix.platform }} \
+            -v $(pwd)/$OUT:/workspace ubuntu:22.04 \
+            sh -c "apt-get update && apt-get install -y binutils && \
+                   strip /workspace/quake2 /workspace/q2ded /workspace/*.so 2>/dev/null || true"
           
           zip -r quake2-${{ matrix.suffix }}-${{ env.TAG }}.zip $OUT
 
