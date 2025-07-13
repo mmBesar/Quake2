@@ -1,4 +1,4 @@
-name: Build and Release Binaries (multi-arch)
+name: Build and Release Binaries
 
 on:
   push:
@@ -10,40 +10,39 @@ permissions:
   contents: write
 
 jobs:
-  build-release:
+  build:
     runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
           - arch: amd64
             platform: linux/amd64
-            suffix: linux-amd64
+            output: output-amd64
           - arch: arm64
             platform: linux/arm64/v8
-            suffix: linux-arm64
+            output: output-arm64
 
     steps:
-      - name: Checkout code
+      - name: Checkout Code
         uses: actions/checkout@v4
         with:
           ref: upstream
           fetch-depth: 0
 
-      - name: Determine latest tag
+      - name: Determine TAG
+        id: tag
         run: |
-          echo "TAG=$(git tag --sort=-creatordate | grep QUAKE2_ | head -1)" >> $GITHUB_ENV
+          echo "TAG=$(git describe --tags --abbrev=0)" >> $GITHUB_ENV
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build Quake2 for ${{ matrix.arch }}
+      - name: Build with Docker
         run: |
-          mkdir -p output-${{ matrix.arch }}
+          mkdir -p ${{ matrix.output }}
 
           cat > Dockerfile.build << 'EOF'
           FROM ubuntu:22.04
@@ -71,46 +70,45 @@ jobs:
           docker buildx build \
             --platform ${{ matrix.platform }} \
             --file Dockerfile.build \
-            --output type=local,dest=output-${{ matrix.arch }} \
-            --build-context .=$(pwd) \
+            --output type=local,dest=${{ matrix.output }} \
             .
 
-          echo "==> Contents of output-${{ matrix.arch }}"
-          ls -R output-${{ matrix.arch }}
+      - name: Show Output
+        run: ls -R ${{ matrix.output }}
 
       - name: Package Debug ZIP
         run: |
-          OUT=Quake2-${{ matrix.suffix }}-debug
+          OUT=Quake2-linux-${{ matrix.arch }}-debug
           mkdir -p $OUT/baseq2
-          cp output-${{ matrix.arch }}/quake2         $OUT/
-          cp output-${{ matrix.arch }}/q2ded          $OUT/
-          cp output-${{ matrix.arch }}/ref_*.so       $OUT/ || true
-          cp output-${{ matrix.arch }}/baseq2/game.so $OUT/baseq2/ || true
-          zip -r quake2-${{ matrix.suffix }}-${{ env.TAG }}-debug.zip $OUT
+          cp ${{ matrix.output }}/quake2         $OUT/ || true
+          cp ${{ matrix.output }}/q2ded          $OUT/ || true
+          cp ${{ matrix.output }}/ref_*.so       $OUT/ || true
+          cp ${{ matrix.output }}/baseq2/game.so $OUT/baseq2/ || true
+          zip -r quake2-linux-${{ matrix.arch }}-${{ env.TAG }}-debug.zip $OUT
 
-      - name: Strip & Package Release ZIP
+      - name: Strip and Package Release ZIP
         run: |
-          OUT=Quake2-${{ matrix.suffix }}
+          OUT=Quake2-linux-${{ matrix.arch }}
           mkdir -p $OUT/baseq2
-          cp output-${{ matrix.arch }}/quake2         $OUT/
-          cp output-${{ matrix.arch }}/q2ded          $OUT/
-          cp output-${{ matrix.arch }}/ref_*.so       $OUT/ || true
-          cp output-${{ matrix.arch }}/baseq2/game.so $OUT/baseq2/ || true
+          cp ${{ matrix.output }}/quake2         $OUT/ || true
+          cp ${{ matrix.output }}/q2ded          $OUT/ || true
+          cp ${{ matrix.output }}/ref_*.so       $OUT/ || true
+          cp ${{ matrix.output }}/baseq2/game.so $OUT/baseq2/ || true
 
           docker run --rm --platform ${{ matrix.platform }} \
             -v $(pwd)/$OUT:/workspace ubuntu:22.04 \
             sh -c "apt-get update && apt-get install -y binutils && \
                    strip /workspace/quake2 /workspace/q2ded /workspace/*.so 2>/dev/null || true"
 
-          zip -r quake2-${{ matrix.suffix }}-${{ env.TAG }}.zip $OUT
+          zip -r quake2-linux-${{ matrix.arch }}-${{ env.TAG }}.zip $OUT
 
-      - name: Upload to GitHub Releases
+      - name: Upload Release Assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
           name: ${{ env.TAG }}
           files: |
-            quake2-${{ matrix.suffix }}-${{ env.TAG }}.zip
-            quake2-${{ matrix.suffix }}-${{ env.TAG }}-debug.zip
+            quake2-linux-${{ matrix.arch }}-${{ env.TAG }}.zip
+            quake2-linux-${{ matrix.arch }}-${{ env.TAG }}-debug.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
