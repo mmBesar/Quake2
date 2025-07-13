@@ -37,6 +37,7 @@ jobs:
           else
             TAG=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | jq -r .tag_name)
             echo "TAG=$TAG" >> $GITHUB_ENV
+          fi
 
       - name: Compute lowercase image name
         id: lowercase
