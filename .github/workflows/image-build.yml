@@ -1,10 +1,10 @@
 name: Build, Push & Manifest Multi‑Arch Image
 
 on:
-  push:
-    branches: [ upstream, main ]
-    paths-ignore:
-      - 'README.md'
+  # push:
+  #   branches: [ upstream, main ]
+  #   paths-ignore:
+  #     - 'README.md'
   workflow_dispatch:
 
 permissions:
