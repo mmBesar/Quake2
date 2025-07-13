@@ -17,6 +17,9 @@ FROM debian:bullseye-slim
 LABEL maintainer="mmBesar"
 LABEL org.opencontainers.image.source="https://github.com/mmBesar/Quake2"
 
+ARG Q2_PORT=27910
+ENV Q2_PORT=${Q2_PORT}
+
 # Install runtime deps
 RUN apt-get update \
  && apt-get install -y libstdc++6 tzdata ca-certificates libopenal1 libsdl2-2.0-0 libgl1 curl unzip \
@@ -50,5 +53,3 @@ EXPOSE ${Q2_PORT}/udp
 
 USER quake2
 ENTRYPOINT ["/usr/local/bin/start.sh"]
-
-EXPOSE ${Q2_PORT}/udp
