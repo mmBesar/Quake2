@@ -1,136 +1,287 @@
-name: Build & Publish Binaries
+name: Build yquake2 Multi-arch Release
 
 on:
   workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Force build even if no changes'
+        required: false
+        default: false
+        type: boolean
   push:
-    branches: [ upstream ]
+    branches:
+      - upstream
+  schedule:
+    # Check for upstream updates every 6 hours
+    - cron: '0 */6 * * *'
 
-permissions:
-  contents: write
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/yquake2-builder
 
 jobs:
-  prepare:
-    name: Prepare & Get Tag
-    runs-on: ubuntu-22.04
+  check-updates:
+    runs-on: ubuntu-latest
     outputs:
-      tag: ${{ steps.get_tag.outputs.latest }}
+      should_build: ${{ steps.check.outputs.should_build }}
+      latest_tag: ${{ steps.check.outputs.latest_tag }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
-      - run: git fetch --tags --force
+    - name: Check for updates or manual trigger
+      id: check
+      run: |
+        # Get the latest tag from upstream
+        LATEST_TAG=$(git tag --sort=-version:refname | head -n1)
+        echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+        
+        # Check if this is a manual trigger
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          echo "Manual trigger detected"
+          echo "should_build=true" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+        
+        # Check if there are any releases for this tag
+        if gh release view "$LATEST_TAG" >/dev/null 2>&1; then
+          echo "Release for $LATEST_TAG already exists"
+          echo "should_build=false" >> $GITHUB_OUTPUT
+        else
+          echo "No release found for $LATEST_TAG, should build"
+          echo "should_build=true" >> $GITHUB_OUTPUT
+        fi
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - id: get_tag
-        run: |
-          latest=$(git describe --tags "$(git rev-list --tags --max-count=1)")
-          echo "latest=$latest" >> $GITHUB_OUTPUT
-
-  build:
-    name: Build ${{ matrix.arch }}
-    needs: prepare
-    runs-on: ubuntu-22.04
+  build-matrix:
+    needs: check-updates
+    if: needs.check-updates.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
     strategy:
       matrix:
-        include:
-          - arch: amd64
-            triple: x86_64-linux-gnu
-            make_arch: linux-x86_64
-          - arch: arm64
-            triple: aarch64-linux-gnu
-            make_arch: linux-aarch64
-
+        arch: [amd64, arm64]
+        build_type: [release, debug]
+    outputs:
+      tag: ${{ needs.check-updates.outputs.latest_tag }}
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        ref: upstream
 
-      - name: Install native build deps (amd64)
-        if: ${{ matrix.arch == 'amd64' }}
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential pkg-config libsdl2-dev zlib1g-dev \
-            zip
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
 
-      - name: Enable arm64 multi‑arch & install cross-deps
-        if: ${{ matrix.arch == 'arm64' }}
-        run: |
-          sudo dpkg --add-architecture arm64
+    - name: Build for ${{ matrix.arch }} (${{ matrix.build_type }})
+      run: |
+        # Create build directory
+        mkdir -p build-${{ matrix.arch }}-${{ matrix.build_type }}
+        
+        # Determine platform
+        if [[ "${{ matrix.arch }}" == "amd64" ]]; then
+          PLATFORM="linux/amd64"
+          DOCKER_ARCH="amd64"
+        else
+          PLATFORM="linux/arm64"
+          DOCKER_ARCH="arm64"
+        fi
+        
+        # Create Dockerfile for building
+        cat > Dockerfile.builder << 'EOF'
+        ARG BASE_IMAGE=ubuntu:22.04
+        FROM $BASE_IMAGE
+        
+        # Install dependencies
+        RUN apt-get update && apt-get install -y \
+            build-essential \
+            libgl1-mesa-dev \
+            libsdl2-dev \
+            libopenal-dev \
+            curl \
+            zip \
+            git \
+            && rm -rf /var/lib/apt/lists/*
+        
+        WORKDIR /build
+        COPY . .
+        
+        # Build script
+        RUN chmod +x /build/build.sh
+        ENTRYPOINT ["/build/build.sh"]
+        EOF
+        
+        # Create build script
+        cat > build.sh << 'EOF'
+        #!/bin/bash
+        set -e
+        
+        BUILD_TYPE=$1
+        ARCH=$2
+        TAG=$3
+        
+        echo "Building yquake2 for $ARCH ($BUILD_TYPE)"
+        
+        # Set build flags based on build type
+        if [[ "$BUILD_TYPE" == "debug" ]]; then
+          export CFLAGS="-g -O0 -DDEBUG"
+          export LDFLAGS="-g"
+          BUILD_SUFFIX="-debug"
+        else
+          export CFLAGS="-O2 -DNDEBUG"
+          export LDFLAGS="-s"
+          BUILD_SUFFIX=""
+        fi
+        
+        # Build the project
+        make clean || true
+        make -j$(nproc)
+        
+        # Create release structure
+        mkdir -p /output/release
+        cp -r release/* /output/release/ 2>/dev/null || true
+        
+        # Copy built binaries
+        find . -name "*.so" -o -name "quake2" -o -name "q2ded" | while read file; do
+          cp "$file" /output/release/
+        done
+        
+        # Create archive
+        cd /output
+        zip -r "quake2-linux-$ARCH-$TAG$BUILD_SUFFIX.zip" release/
+        
+        echo "Build completed successfully"
+        ls -la /output/
+        EOF
+        
+        chmod +x build.sh
+        
+        # Build with Docker
+        docker buildx build \
+          --platform $PLATFORM \
+          --file Dockerfile.builder \
+          --output type=local,dest=./build-${{ matrix.arch }}-${{ matrix.build_type }} \
+          --build-arg BASE_IMAGE=ubuntu:22.04 \
+          .
+        
+        # Run the build
+        docker run --rm \
+          --platform $PLATFORM \
+          -v $(pwd):/src \
+          -v $(pwd)/build-${{ matrix.arch }}-${{ matrix.build_type }}:/output \
+          -w /src \
+          ubuntu:22.04 \
+          bash -c "
+            apt-get update && apt-get install -y \
+              build-essential \
+              libgl1-mesa-dev \
+              libsdl2-dev \
+              libopenal-dev \
+              zip \
+              && cd /src \
+              && chmod +x build.sh \
+              && ./build.sh ${{ matrix.build_type }} ${{ matrix.arch }} ${{ needs.check-updates.outputs.latest_tag }}
+          "
 
-          # Remove invalid arm64 sources to prevent 404s
-          sudo sed -i '/^deb .*security\.ubuntu\.com.*arm64/d' /etc/apt/sources.list
-          sudo sed -i '/^deb .*archive\.ubuntu\.com.*arm64/d' /etc/apt/sources.list
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: quake2-linux-${{ matrix.arch }}-${{ needs.check-updates.outputs.latest_tag }}-${{ matrix.build_type }}
+        path: build-${{ matrix.arch }}-${{ matrix.build_type }}/*.zip
+        retention-days: 1
 
-          # Add correct arm64 sources
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/arm64-ports.list
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ jammy-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
-
-          sudo apt-get update
-          sudo apt-get install -y \
-            gcc-${{ matrix.triple }} \
-            g++-${{ matrix.triple }} \
-            binutils-${{ matrix.triple }} \
-            libsdl2-dev:arm64 \
-            zlib1g-dev:arm64 \
-            zip pkg-config
-
-      - name: Build RELEASE & zip
-        run: |
-          git clean -fdx
-          make BUILD=release \
-               ARCH=${{ matrix.make_arch }} \
-               CC=${{ matrix.triple }}-gcc \
-               CXX=${{ matrix.triple }}-g++
-          mkdir -p out
-          zip -j out/quake2-linux-${{ matrix.arch }}-${{ needs.prepare.outputs.tag }}.zip \
-            quake2 q2ded ref_*.so baseq2/game.so
-
-      - name: Build DEBUG & zip
-        run: |
-          git clean -fdx
-          make BUILD=debug \
-               ARCH=${{ matrix.make_arch }} \
-               CC=${{ matrix.triple }}-gcc \
-               CXX=${{ matrix.triple }}-g++
-          zip -j out/quake2-linux-${{ matrix.arch }}-${{ needs.prepare.outputs.tag }}-debug.zip \
-            quake2 q2ded ref_*.so baseq2/game.so
-
-      - name: Upload ZIPs as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: binaries-${{ matrix.arch }}
-          path: out/*.zip
-
-  release:
-    name: Publish Release
-    needs: [prepare, build]
-    runs-on: ubuntu-22.04
+  create-release:
+    needs: [check-updates, build-matrix]
+    if: needs.check-updates.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: binaries-amd64
-          path: artifacts/amd64
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: binaries-arm64
-          path: artifacts/arm64
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: ./artifacts
 
-      - name: Create or Update GitHub Release
-        uses: peter-evans/create-or-update-release@v4
-        id: create_release
-        with:
-          tag_name: ${{ needs.prepare.outputs.tag }}
-          release_name: ${{ needs.prepare.outputs.tag }}
-          draft: false
-          prerelease: false
+    - name: Prepare release assets
+      run: |
+        mkdir -p ./release-assets
+        find ./artifacts -name "*.zip" -exec cp {} ./release-assets/ \;
+        ls -la ./release-assets/
 
-      - name: Upload ZIPs to GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            artifacts/amd64/*.zip
-            artifacts/arm64/*.zip
+    - name: Create or update release
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.check-updates.outputs.latest_tag }}
+      run: |
+        # Check if release already exists
+        if gh release view "$TAG" >/dev/null 2>&1; then
+          echo "Release $TAG already exists, updating..."
+          
+          # Delete existing assets
+          gh release view "$TAG" --json assets --jq '.assets[].name' | while read asset; do
+            if [[ "$asset" =~ ^quake2-linux-(amd64|arm64)-.* ]]; then
+              gh release delete-asset "$TAG" "$asset" --yes || true
+            fi
+          done
+          
+          # Upload new assets
+          gh release upload "$TAG" ./release-assets/*.zip --clobber
+        else
+          echo "Creating new release $TAG..."
+          
+          # Create release notes
+          cat > release-notes.md << EOF
+        # Yamagi Quake II $TAG - Multi-arch Linux Build
+        
+        This is an automated build of Yamagi Quake II $TAG for Linux systems.
+        
+        ## Available Downloads
+        
+        - **quake2-linux-amd64-$TAG.zip** - Optimized build for 64-bit x86 systems
+        - **quake2-linux-amd64-$TAG-debug.zip** - Debug build for 64-bit x86 systems
+        - **quake2-linux-arm64-$TAG.zip** - Optimized build for 64-bit ARM systems
+        - **quake2-linux-arm64-$TAG-debug.zip** - Debug build for 64-bit ARM systems
+        
+        ## Installation
+        
+        1. Download the appropriate archive for your system architecture
+        2. Extract the contents to your Quake II installation directory
+        3. Make sure you have the required dependencies installed:
+           - OpenGL drivers
+           - SDL2 (\`libsdl2-2.0-0\`)
+           - OpenAL (\`libopenal1\`)
+        
+        ## Notes
+        
+        - This build is based on the upstream Yamagi Quake II repository
+        - Debug builds include debugging symbols and are larger in size
+        - For more information, visit the [official Yamagi Quake II website](https://www.yamagi.org/quake2/)
+        
+        ---
+        
+        *This release was automatically generated from the upstream repository.*
+        EOF
+          
+          # Create the release
+          gh release create "$TAG" \
+            --title "Yamagi Quake II $TAG - Multi-arch Linux Build" \
+            --notes-file release-notes.md \
+            --latest \
+            ./release-assets/*.zip
+        fi
+
+  cleanup:
+    needs: [create-release]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+    - name: Cleanup artifacts
+      uses: geekyeggo/delete-artifact@v5
+      with:
+        name: |
+          quake2-linux-amd64-*
+          quake2-linux-arm64-*
+        failOnError: false
