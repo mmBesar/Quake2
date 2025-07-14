@@ -1,370 +1,291 @@
-name: Build yquake2 Multi-arch Release
+name: Build YQuake2 Multi-Architecture Binaries
 
 on:
+  # Manual trigger for testing
   workflow_dispatch:
-    inputs:
-      force_build:
-        description: 'Force build even if no changes'
-        required: false
-        default: false
-        type: boolean
+  
+  # Trigger when upstream branch is updated
   push:
     branches:
       - upstream
-  schedule:
-    # Check for upstream updates every 6 hours
-    - cron: '0 */6 * * *'
+  
+  # Trigger on pull requests to upstream branch
+  pull_request:
+    branches:
+      - upstream
 
+env:
+  # Build configuration
+  BUILD_TYPE: Release
+  
 jobs:
-  check-updates:
+  # Job to get the latest tag from upstream
+  get-tag:
     runs-on: ubuntu-latest
     outputs:
-      should_build: ${{ steps.check.outputs.should_build }}
-      latest_tag: ${{ steps.check.outputs.latest_tag }}
+      tag: ${{ steps.get_tag.outputs.tag }}
+      tag_exists: ${{ steps.check_tag.outputs.tag_exists }}
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Get latest tag
+        id: get_tag
+        run: |
+          # Get the latest tag that matches the QUAKE2_* pattern
+          LATEST_TAG=$(git tag -l "QUAKE2_*" | sort -V | tail -n1)
+          if [ -z "$LATEST_TAG" ]; then
+            echo "No QUAKE2_* tags found, using default"
+            LATEST_TAG="QUAKE2_8_51"
+          fi
+          echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+          echo "Latest tag: $LATEST_TAG"
+          
+      - name: Check if release exists
+        id: check_tag
+        run: |
+          TAG="${{ steps.get_tag.outputs.tag }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "tag_exists=true" >> $GITHUB_OUTPUT
+            echo "Release $TAG already exists"
+          else
+            echo "tag_exists=false" >> $GITHUB_OUTPUT
+            echo "Release $TAG does not exist"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Check for updates or manual trigger
-      id: check
-      run: |
-        # Get the latest tag from upstream
-        LATEST_TAG=$(git tag --sort=-version:refname | head -n1)
-        echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
-        
-        # Check if this is a manual trigger
-        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-          echo "Manual trigger detected"
-          echo "should_build=true" >> $GITHUB_OUTPUT
-          exit 0
-        fi
-        
-        # Check if there are any releases for this tag
-        if gh release view "$LATEST_TAG" >/dev/null 2>&1; then
-          echo "Release for $LATEST_TAG already exists"
-          echo "should_build=false" >> $GITHUB_OUTPUT
-        else
-          echo "No release found for $LATEST_TAG, should build"
-          echo "should_build=true" >> $GITHUB_OUTPUT
-        fi
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  build-matrix:
-    needs: check-updates
-    if: needs.check-updates.outputs.should_build == 'true'
+  # Build job for both architectures
+  build:
     runs-on: ubuntu-latest
+    needs: get-tag
     strategy:
       matrix:
         arch: [amd64, arm64]
-      fail-fast: false
-    outputs:
-      tag: ${{ needs.check-updates.outputs.latest_tag }}
+        build_type: [release, debug]
+    
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        ref: upstream
-
-    - name: Set up QEMU
-      uses: docker/setup-qemu-action@v3
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-
-    - name: Build for ${{ matrix.arch }}
-      run: |
-        # Determine platform
-        if [[ "${{ matrix.arch }}" == "amd64" ]]; then
-          PLATFORM="linux/amd64"
-        else
-          PLATFORM="linux/arm64"
-        fi
-        
-        # Create build script
-        cat > build.sh << 'EOF'
-        #!/bin/bash
-        set -e
-        
-        ARCH=$1
-        TAG=$2
-        
-        echo "Building yquake2 for $ARCH"
-        
-        # Install dependencies
-        export DEBIAN_FRONTEND=noninteractive
-        apt-get update
-        apt-get install -y \
-            build-essential \
-            libgl1-mesa-dev \
-            libsdl2-dev \
-            libopenal-dev \
-            zip \
-            file
-        
-        # Check the Makefile structure
-        echo "Checking Makefile targets..."
-        make help || echo "No help target available"
-        
-        # List some key directories
-        echo "Source structure:"
-        ls -la src/ || echo "No src directory"
-        
-        echo "Release directory (before build):"
-        ls -la release/ || echo "No release directory yet"
-        
-        # Build with debug symbols, but ignore format-truncation warnings
-        export CFLAGS="-g -O2 -Wno-format-truncation"
-        export LDFLAGS="-g"
-        
-        # Clean and build
-        make clean || true
-        
-        # Try building with more verbose output and continue on errors
-        echo "Starting build process..."
-        make -j$(nproc) -k || {
-            echo "Build failed, checking what was built..."
-            find . -name "*.so" -o -name "quake2" -o -name "q2ded" | head -10
-            
-            echo "Checking make output for errors..."
-            echo "Trying to build individual targets..."
-            
-            # Try building each target individually
-            echo "Building game library..."
-            make release/baseq2/game.so || echo "Game library build failed"
-            
-            echo "Building dedicated server..."
-            make release/q2ded || echo "Dedicated server build failed"
-            
-            echo "Building client..."
-            make release/quake2 || echo "Client build failed"
-            
-            echo "Building renderers..."
-            make release/ref_gl1.so || echo "GL1 renderer build failed"
-            make release/ref_gl3.so || echo "GL3 renderer build failed"
-            make release/ref_gles3.so || echo "GLES3 renderer build failed"
-            make release/ref_soft.so || echo "Software renderer build failed"
-            
-            echo "Final check of built files..."
-            find . -name "*.so" -o -name "quake2" -o -name "q2ded"
-        }
-        
-        # Create output directory structure
-        mkdir -p /output/quake2-linux-$ARCH
-        cd /output/quake2-linux-$ARCH
-        
-        # Copy the built files in the expected structure
-        mkdir -p baseq2
-        
-        # Copy files if they exist
-        if [[ -f /src/release/baseq2/game.so ]]; then
-            cp /src/release/baseq2/game.so baseq2/
-        else
-            echo "ERROR: game.so not found"
-            exit 1
-        fi
-        
-        if [[ -f /src/release/quake2 ]]; then
-            cp /src/release/quake2 .
-        else
-            echo "ERROR: quake2 binary not found"
-            exit 1
-        fi
-        
-        if [[ -f /src/release/q2ded ]]; then
-            cp /src/release/q2ded .
-        else
-            echo "ERROR: q2ded binary not found"
-            exit 1
-        fi
-        
-        # Copy renderer libraries
-        for renderer in ref_gl1.so ref_gl3.so ref_gles3.so ref_soft.so; do
-            if [[ -f /src/release/$renderer ]]; then
-                cp /src/release/$renderer .
-            else
-                echo "ERROR: $renderer not found"
-                exit 1
-            fi
-        done
-        
-        # Verify all files are present
-        echo "Verifying build output:"
-        ls -la
-        ls -la baseq2/
-        
-        # Create release version (stripped)
-        cd /output
-        cp -r quake2-linux-$ARCH quake2-linux-$ARCH-release
-        
-        # Strip debug symbols from release version
-        strip quake2-linux-$ARCH-release/quake2
-        strip quake2-linux-$ARCH-release/q2ded
-        strip quake2-linux-$ARCH-release/baseq2/game.so
-        strip quake2-linux-$ARCH-release/ref_*.so
-        
-        # Create debug version (keep symbols)
-        cp -r quake2-linux-$ARCH quake2-linux-$ARCH-debug
-        
-        # Create archives
-        zip -r "quake2-linux-$ARCH-$TAG.zip" quake2-linux-$ARCH-release/
-        zip -r "quake2-linux-$ARCH-$TAG-debug.zip" quake2-linux-$ARCH-debug/
-        
-        echo "Build completed successfully"
-        ls -la *.zip
-        
-        # Show file sizes for verification
-        echo "File sizes:"
-        du -h *.zip
-        EOF
-        
-        chmod +x build.sh
-        mkdir -p output
-        
-        # Run the build in container
-        docker run --rm \
-          --platform $PLATFORM \
-          -v $(pwd):/src \
-          -v $(pwd)/output:/output \
-          -w /src \
-          ubuntu:22.04 \
-          bash -c "./build.sh ${{ matrix.arch }} ${{ needs.check-updates.outputs.latest_tag }}"
-
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: quake2-linux-${{ matrix.arch }}-${{ needs.check-updates.outputs.latest_tag }}
-        path: output/*.zip
-        retention-days: 1
-
-  create-release:
-    needs: [check-updates, build-matrix]
-    if: needs.check-updates.outputs.should_build == 'true'
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Download all artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: ./artifacts
-
-    - name: Prepare release assets
-      run: |
-        mkdir -p ./release-assets
-        find ./artifacts -name "*.zip" -exec cp {} ./release-assets/ \;
-        
-        echo "Release assets prepared:"
-        ls -la ./release-assets/
-        
-        # Verify we have all 4 expected files
-        expected_files=(
-          "quake2-linux-amd64-${{ needs.check-updates.outputs.latest_tag }}.zip"
-          "quake2-linux-amd64-${{ needs.check-updates.outputs.latest_tag }}-debug.zip"
-          "quake2-linux-arm64-${{ needs.check-updates.outputs.latest_tag }}.zip"
-          "quake2-linux-arm64-${{ needs.check-updates.outputs.latest_tag }}-debug.zip"
-        )
-        
-        for file in "${expected_files[@]}"; do
-          if [[ ! -f "./release-assets/$file" ]]; then
-            echo "ERROR: Missing expected file: $file"
-            exit 1
-          fi
-        done
-        
-        echo "All expected files are present!"
-
-    - name: Create or update release
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        TAG: ${{ needs.check-updates.outputs.latest_tag }}
-      run: |
-        # Check if release already exists
-        if gh release view "$TAG" >/dev/null 2>&1; then
-          echo "Release $TAG already exists, updating..."
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
           
-          # Delete existing assets
-          gh release view "$TAG" --json assets --jq '.assets[].name' | while read asset; do
-            if [[ "$asset" =~ ^quake2-linux-(amd64|arm64)-.* ]]; then
-              gh release delete-asset "$TAG" "$asset" --yes || true
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+          
+      - name: Create build environment
+        run: |
+          TAG="${{ needs.get-tag.outputs.tag }}"
+          ARCH="${{ matrix.arch }}"
+          BUILD_TYPE="${{ matrix.build_type }}"
+          
+          # Set architecture-specific variables
+          if [ "$ARCH" = "amd64" ]; then
+            DOCKER_PLATFORM="linux/amd64"
+            DOCKER_ARCH="amd64"
+          else
+            DOCKER_PLATFORM="linux/arm64"
+            DOCKER_ARCH="arm64"
+          fi
+          
+          # Set build type specific variables
+          if [ "$BUILD_TYPE" = "debug" ]; then
+            MAKE_DEBUG="DEBUG=1"
+            BUILD_SUFFIX="-debug"
+          else
+            MAKE_DEBUG=""
+            BUILD_SUFFIX=""
+          fi
+          
+          # Create Dockerfile for build environment
+          cat > Dockerfile <<EOF
+          FROM --platform=$DOCKER_PLATFORM ubuntu:22.04
+          
+          # Prevent interactive prompts
+          ENV DEBIAN_FRONTEND=noninteractive
+          
+          # Install build dependencies
+          RUN apt-get update && apt-get install -y \
+              build-essential \
+              gcc \
+              g++ \
+              make \
+              cmake \
+              pkg-config \
+              libgl1-mesa-dev \
+              libglu1-mesa-dev \
+              libsdl2-dev \
+              libogg-dev \
+              libvorbis-dev \
+              libopenal-dev \
+              libcurl4-openssl-dev \
+              zlib1g-dev \
+              git \
+              && rm -rf /var/lib/apt/lists/*
+          
+          # Create working directory
+          WORKDIR /build
+          
+          # Copy source code
+          COPY . .
+          
+          # Build the project
+          RUN make clean && make $MAKE_DEBUG -j\$(nproc) all
+          
+          # Create output structure
+          RUN mkdir -p /output/quake2-linux-$ARCH && \\
+              cp release/quake2 /output/quake2-linux-$ARCH/ && \\
+              cp release/q2ded /output/quake2-linux-$ARCH/ && \\
+              cp release/ref_gl1.so /output/quake2-linux-$ARCH/ && \\
+              cp release/ref_gl3.so /output/quake2-linux-$ARCH/ && \\
+              cp release/ref_gles3.so /output/quake2-linux-$ARCH/ && \\
+              cp release/ref_soft.so /output/quake2-linux-$ARCH/ && \\
+              mkdir -p /output/quake2-linux-$ARCH/baseq2 && \\
+              cp release/baseq2/game.so /output/quake2-linux-$ARCH/baseq2/
+          EOF
+          
+          # Store variables for later steps
+          echo "DOCKER_PLATFORM=$DOCKER_PLATFORM" >> $GITHUB_ENV
+          echo "DOCKER_ARCH=$DOCKER_ARCH" >> $GITHUB_ENV
+          echo "BUILD_SUFFIX=$BUILD_SUFFIX" >> $GITHUB_ENV
+          echo "MAKE_DEBUG=$MAKE_DEBUG" >> $GITHUB_ENV
+          
+      - name: Build YQuake2
+        run: |
+          TAG="${{ needs.get-tag.outputs.tag }}"
+          ARCH="${{ matrix.arch }}"
+          BUILD_TYPE="${{ matrix.build_type }}"
+          
+          # Build using Docker
+          docker build \
+            --platform=$DOCKER_PLATFORM \
+            --build-arg MAKE_DEBUG="$MAKE_DEBUG" \
+            -t yquake2-build:$ARCH-$BUILD_TYPE \
+            .
+          
+          # Extract built files
+          docker run --rm \
+            --platform=$DOCKER_PLATFORM \
+            -v $(pwd)/output:/host_output \
+            yquake2-build:$ARCH-$BUILD_TYPE \
+            cp -r /output/. /host_output/
+            
+      - name: Create release package
+        run: |
+          TAG="${{ needs.get-tag.outputs.tag }}"
+          ARCH="${{ matrix.arch }}"
+          BUILD_TYPE="${{ matrix.build_type }}"
+          
+          cd output
+          
+          # Verify all required files exist
+          REQUIRED_FILES=(
+            "quake2-linux-$ARCH/quake2"
+            "quake2-linux-$ARCH/q2ded"
+            "quake2-linux-$ARCH/ref_gl1.so"
+            "quake2-linux-$ARCH/ref_gl3.so"
+            "quake2-linux-$ARCH/ref_gles3.so"
+            "quake2-linux-$ARCH/ref_soft.so"
+            "quake2-linux-$ARCH/baseq2/game.so"
+          )
+          
+          for file in "${REQUIRED_FILES[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "Error: Required file $file not found"
+              exit 1
             fi
           done
           
-          # Upload new assets
-          gh release upload "$TAG" ./release-assets/*.zip --clobber
-        else
-          echo "Creating new release $TAG..."
+          # Create ZIP archive
+          ZIP_NAME="quake2-linux-$ARCH-$TAG$BUILD_SUFFIX.zip"
+          zip -r "$ZIP_NAME" "quake2-linux-$ARCH"
           
-          # Create release notes
-          cat > release-notes.md << EOF
-        # Yamagi Quake II $TAG - Multi-arch Linux Build
-        
-        This is an automated build of Yamagi Quake II $TAG for Linux systems.
-        
-        ## Available Downloads
-        
-        - **quake2-linux-amd64-$TAG.zip** - Optimized build for 64-bit x86 systems
-        - **quake2-linux-amd64-$TAG-debug.zip** - Debug build for 64-bit x86 systems (includes debug symbols)
-        - **quake2-linux-arm64-$TAG.zip** - Optimized build for 64-bit ARM systems
-        - **quake2-linux-arm64-$TAG-debug.zip** - Debug build for 64-bit ARM systems (includes debug symbols)
-        
-        ## Installation
-        
-        1. Download the appropriate archive for your system architecture
-        2. Extract the contents to your desired location
-        3. Make sure you have the required dependencies installed:
-           - OpenGL drivers
-           - SDL2 (\`libsdl2-2.0-0\`)
-           - OpenAL (\`libopenal1\`)
-        
-        ## Package Contents
-        
-        Each package contains:
-        - \`quake2\` - Main game executable
-        - \`q2ded\` - Dedicated server executable
-        - \`baseq2/game.so\` - Game logic library
-        - \`ref_gl1.so\` - OpenGL 1.x renderer
-        - \`ref_gl3.so\` - OpenGL 3.2 renderer
-        - \`ref_gles3.so\` - OpenGL ES 3.0 renderer
-        - \`ref_soft.so\` - Software renderer
-        
-        ## Usage
-        
-        \`\`\`bash
-        ./quake2 +set vid_renderer gl3
-        \`\`\`
-        
-        ## Notes
-        
-        - This build is based on the upstream Yamagi Quake II repository
-        - Debug builds include debugging symbols and are larger in size
-        - For more information, visit the [official Yamagi Quake II website](https://www.yamagi.org/quake2/)
-        
-        ---
-        
-        *This release was automatically generated from the upstream repository.*
-        EOF
+          # Verify ZIP contents
+          echo "ZIP contents:"
+          unzip -l "$ZIP_NAME"
           
-          # Create the release
-          gh release create "$TAG" \
-            --title "Yamagi Quake II $TAG - Multi-arch Linux Build" \
-            --notes-file release-notes.md \
-            --latest \
-            ./release-assets/*.zip
-        fi
+          # Move to artifacts directory
+          mkdir -p ../artifacts
+          mv "$ZIP_NAME" ../artifacts/
+          
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: quake2-linux-${{ matrix.arch }}-${{ needs.get-tag.outputs.tag }}${{ env.BUILD_SUFFIX }}
+          path: artifacts/
+          retention-days: 30
 
-  cleanup:
-    needs: [create-release]
-    if: always()
+  # Release job - only runs if tag doesn't exist
+  release:
     runs-on: ubuntu-latest
+    needs: [get-tag, build]
+    if: needs.get-tag.outputs.tag_exists == 'false'
+    
     steps:
-    - name: Cleanup artifacts
-      uses: geekyeggo/delete-artifact@v5
-      with:
-        name: |
-          quake2-linux-amd64-*
-          quake2-linux-arm64-*
-        failOnError: false
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          
+      - name: Prepare release files
+        run: |
+          TAG="${{ needs.get-tag.outputs.tag }}"
+          
+          # Create release directory
+          mkdir -p release
+          
+          # Move all ZIP files to release directory
+          find artifacts/ -name "*.zip" -exec mv {} release/ \;
+          
+          # List files for verification
+          echo "Release files:"
+          ls -la release/
+          
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.get-tag.outputs.tag }}
+          name: "YQuake2 ${{ needs.get-tag.outputs.tag }}"
+          files: release/*
+          body: |
+            # YQuake2 ${{ needs.get-tag.outputs.tag }} - Multi-Architecture Release
+            
+            This release contains Linux binaries for both AMD64 and ARM64 architectures.
+            
+            ## Files included:
+            - `quake2-linux-amd64-${{ needs.get-tag.outputs.tag }}.zip` - AMD64 Release build
+            - `quake2-linux-amd64-${{ needs.get-tag.outputs.tag }}-debug.zip` - AMD64 Debug build
+            - `quake2-linux-arm64-${{ needs.get-tag.outputs.tag }}.zip` - ARM64 Release build
+            - `quake2-linux-arm64-${{ needs.get-tag.outputs.tag }}-debug.zip` - ARM64 Debug build
+            
+            ## Each archive contains:
+            ```
+            quake2-linux-<arch>/
+            ├── baseq2/
+            │   └── game.so
+            ├── q2ded
+            ├── quake2
+            ├── ref_gl1.so
+            ├── ref_gl3.so
+            ├── ref_gles3.so
+            └── ref_soft.so
+            ```
+            
+            Built from upstream YQuake2 repository.
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Update release status
+        run: |
+          TAG="${{ needs.get-tag.outputs.tag }}"
+          echo "✅ Released YQuake2 $TAG with multi-architecture binaries"
+          echo "📦 Release URL: https://github.com/${{ github.repository }}/releases/tag/$TAG"
