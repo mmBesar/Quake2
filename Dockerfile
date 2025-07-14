@@ -23,6 +23,7 @@ WORKDIR /src
 
 # Build the dedicated server
 RUN make clean && \
+    mkdir -p release/baseq2 && \
     make -j$(nproc) release/q2ded && \
     make -j$(nproc) release/baseq2/game.so && \
     strip release/q2ded release/baseq2/game.so
