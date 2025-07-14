@@ -15,10 +15,6 @@ on:
     # Check for upstream updates every 6 hours
     - cron: '0 */6 * * *'
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}/yquake2-builder
-
 jobs:
   check-updates:
     runs-on: ubuntu-latest
@@ -63,7 +59,7 @@ jobs:
     strategy:
       matrix:
         arch: [amd64, arm64]
-        build_type: [release, debug]
+      fail-fast: false
     outputs:
       tag: ${{ needs.check-updates.outputs.latest_tag }}
     steps:
@@ -75,121 +71,110 @@ jobs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: Build for ${{ matrix.arch }} (${{ matrix.build_type }})
+    - name: Build for ${{ matrix.arch }}
       run: |
-        # Create build directory
-        mkdir -p build-${{ matrix.arch }}-${{ matrix.build_type }}
-        
         # Determine platform
         if [[ "${{ matrix.arch }}" == "amd64" ]]; then
           PLATFORM="linux/amd64"
-          DOCKER_ARCH="amd64"
         else
           PLATFORM="linux/arm64"
-          DOCKER_ARCH="arm64"
         fi
-        
-        # Create Dockerfile for building
-        cat > Dockerfile.builder << 'EOF'
-        ARG BASE_IMAGE=ubuntu:22.04
-        FROM $BASE_IMAGE
-        
-        # Install dependencies
-        RUN apt-get update && apt-get install -y \
-            build-essential \
-            libgl1-mesa-dev \
-            libsdl2-dev \
-            libopenal-dev \
-            curl \
-            zip \
-            git \
-            && rm -rf /var/lib/apt/lists/*
-        
-        WORKDIR /build
-        COPY . .
-        
-        # Build script
-        RUN chmod +x /build/build.sh
-        ENTRYPOINT ["/build/build.sh"]
-        EOF
         
         # Create build script
         cat > build.sh << 'EOF'
         #!/bin/bash
         set -e
         
-        BUILD_TYPE=$1
-        ARCH=$2
-        TAG=$3
+        ARCH=$1
+        TAG=$2
         
-        echo "Building yquake2 for $ARCH ($BUILD_TYPE)"
+        echo "Building yquake2 for $ARCH"
         
-        # Set build flags based on build type
-        if [[ "$BUILD_TYPE" == "debug" ]]; then
-          export CFLAGS="-g -O0 -DDEBUG"
-          export LDFLAGS="-g"
-          BUILD_SUFFIX="-debug"
-        else
-          export CFLAGS="-O2 -DNDEBUG"
-          export LDFLAGS="-s"
-          BUILD_SUFFIX=""
-        fi
+        # Install dependencies
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update
+        apt-get install -y \
+            build-essential \
+            libgl1-mesa-dev \
+            libsdl2-dev \
+            libopenal-dev \
+            zip \
+            file
         
-        # Build the project
+        # Build with debug symbols
+        export CFLAGS="-g -O2"
+        export LDFLAGS="-g"
+        
+        # Clean and build
         make clean || true
         make -j$(nproc)
         
-        # Create release structure
-        mkdir -p /output/release
-        cp -r release/* /output/release/ 2>/dev/null || true
+        # Create output directory structure
+        mkdir -p /output/quake2-linux-$ARCH
+        cd /output/quake2-linux-$ARCH
         
-        # Copy built binaries
-        find . -name "*.so" -o -name "quake2" -o -name "q2ded" | while read file; do
-          cp "$file" /output/release/
-        done
+        # Copy the built files in the expected structure
+        mkdir -p baseq2
         
-        # Create archive
+        # Copy game library
+        cp /src/release/baseq2/game.so baseq2/
+        
+        # Copy main binaries
+        cp /src/release/quake2 .
+        cp /src/release/q2ded .
+        
+        # Copy renderer libraries
+        cp /src/release/ref_gl1.so .
+        cp /src/release/ref_gl3.so .
+        cp /src/release/ref_gles3.so .
+        cp /src/release/ref_soft.so .
+        
+        # Verify all files are present
+        echo "Verifying build output:"
+        ls -la
+        ls -la baseq2/
+        
+        # Create release version (stripped)
         cd /output
-        zip -r "quake2-linux-$ARCH-$TAG$BUILD_SUFFIX.zip" release/
+        cp -r quake2-linux-$ARCH quake2-linux-$ARCH-release
+        
+        # Strip debug symbols from release version
+        strip quake2-linux-$ARCH-release/quake2
+        strip quake2-linux-$ARCH-release/q2ded
+        strip quake2-linux-$ARCH-release/baseq2/game.so
+        strip quake2-linux-$ARCH-release/ref_*.so
+        
+        # Create debug version (keep symbols)
+        cp -r quake2-linux-$ARCH quake2-linux-$ARCH-debug
+        
+        # Create archives
+        zip -r "quake2-linux-$ARCH-$TAG.zip" quake2-linux-$ARCH-release/
+        zip -r "quake2-linux-$ARCH-$TAG-debug.zip" quake2-linux-$ARCH-debug/
         
         echo "Build completed successfully"
-        ls -la /output/
+        ls -la *.zip
+        
+        # Show file sizes for verification
+        echo "File sizes:"
+        du -h *.zip
         EOF
         
         chmod +x build.sh
         
-        # Build with Docker
-        docker buildx build \
-          --platform $PLATFORM \
-          --file Dockerfile.builder \
-          --output type=local,dest=./build-${{ matrix.arch }}-${{ matrix.build_type }} \
-          --build-arg BASE_IMAGE=ubuntu:22.04 \
-          .
-        
-        # Run the build
+        # Run the build in container
         docker run --rm \
           --platform $PLATFORM \
           -v $(pwd):/src \
-          -v $(pwd)/build-${{ matrix.arch }}-${{ matrix.build_type }}:/output \
+          -v $(pwd)/output:/output \
           -w /src \
           ubuntu:22.04 \
-          bash -c "
-            apt-get update && apt-get install -y \
-              build-essential \
-              libgl1-mesa-dev \
-              libsdl2-dev \
-              libopenal-dev \
-              zip \
-              && cd /src \
-              && chmod +x build.sh \
-              && ./build.sh ${{ matrix.build_type }} ${{ matrix.arch }} ${{ needs.check-updates.outputs.latest_tag }}
-          "
+          bash -c "./build.sh ${{ matrix.arch }} ${{ needs.check-updates.outputs.latest_tag }}"
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: quake2-linux-${{ matrix.arch }}-${{ needs.check-updates.outputs.latest_tag }}-${{ matrix.build_type }}
-        path: build-${{ matrix.arch }}-${{ matrix.build_type }}/*.zip
+        name: quake2-linux-${{ matrix.arch }}-${{ needs.check-updates.outputs.latest_tag }}
+        path: output/*.zip
         retention-days: 1
 
   create-release:
@@ -209,7 +194,26 @@ jobs:
       run: |
         mkdir -p ./release-assets
         find ./artifacts -name "*.zip" -exec cp {} ./release-assets/ \;
+        
+        echo "Release assets prepared:"
         ls -la ./release-assets/
+        
+        # Verify we have all 4 expected files
+        expected_files=(
+          "quake2-linux-amd64-${{ needs.check-updates.outputs.latest_tag }}.zip"
+          "quake2-linux-amd64-${{ needs.check-updates.outputs.latest_tag }}-debug.zip"
+          "quake2-linux-arm64-${{ needs.check-updates.outputs.latest_tag }}.zip"
+          "quake2-linux-arm64-${{ needs.check-updates.outputs.latest_tag }}-debug.zip"
+        )
+        
+        for file in "${expected_files[@]}"; do
+          if [[ ! -f "./release-assets/$file" ]]; then
+            echo "ERROR: Missing expected file: $file"
+            exit 1
+          fi
+        done
+        
+        echo "All expected files are present!"
 
     - name: Create or update release
       env:
@@ -241,18 +245,35 @@ jobs:
         ## Available Downloads
         
         - **quake2-linux-amd64-$TAG.zip** - Optimized build for 64-bit x86 systems
-        - **quake2-linux-amd64-$TAG-debug.zip** - Debug build for 64-bit x86 systems
+        - **quake2-linux-amd64-$TAG-debug.zip** - Debug build for 64-bit x86 systems (includes debug symbols)
         - **quake2-linux-arm64-$TAG.zip** - Optimized build for 64-bit ARM systems
-        - **quake2-linux-arm64-$TAG-debug.zip** - Debug build for 64-bit ARM systems
+        - **quake2-linux-arm64-$TAG-debug.zip** - Debug build for 64-bit ARM systems (includes debug symbols)
         
         ## Installation
         
         1. Download the appropriate archive for your system architecture
-        2. Extract the contents to your Quake II installation directory
+        2. Extract the contents to your desired location
         3. Make sure you have the required dependencies installed:
            - OpenGL drivers
            - SDL2 (\`libsdl2-2.0-0\`)
            - OpenAL (\`libopenal1\`)
+        
+        ## Package Contents
+        
+        Each package contains:
+        - \`quake2\` - Main game executable
+        - \`q2ded\` - Dedicated server executable
+        - \`baseq2/game.so\` - Game logic library
+        - \`ref_gl1.so\` - OpenGL 1.x renderer
+        - \`ref_gl3.so\` - OpenGL 3.2 renderer
+        - \`ref_gles3.so\` - OpenGL ES 3.0 renderer
+        - \`ref_soft.so\` - Software renderer
+        
+        ## Usage
+        
+        \`\`\`bash
+        ./quake2 +set vid_renderer gl3
+        \`\`\`
         
         ## Notes
         
