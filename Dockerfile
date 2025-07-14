@@ -22,10 +22,8 @@ COPY . /src
 WORKDIR /src
 
 # Build the dedicated server
-RUN make clean && \
-    make -j$(nproc) release/q2ded && \
-    make -j$(nproc) release/baseq2/game.so && \
-    strip release/q2ded release/baseq2/game.so
+RUN make -j$(nproc) BUILD=release ARCH=linux-${TARGETARCH} && \
+    strip release/q2ded release/baseq2/game.so release/ref_*.so || true
 
 # Runtime stage
 FROM ubuntu:22.04 AS runtime
