@@ -66,9 +66,12 @@ COPY <<EOF /usr/local/bin/start-server.sh
 #!/bin/bash
 set -e
 
+export HOME=/quake2
+
 # Ensure writable directories exist and are writable by current user
-mkdir -p /quake2/logs /quake2/demos /quake2/config
-chmod 755 /quake2/logs /quake2/demos /quake2/config
+mkdir -p /quake2/logs /quake2/demos /quake2/config /quake2/.yq2
+chmod 755 /quake2/logs /quake2/demos 2>/dev/null || true
+[ -w /quake2/config ] || echo "Warning: /quake2/config is not writable"
 
 # Configuration with environment variables
 SERVER_NAME=\${SERVER_NAME:-"Yamagi Quake II Server"}
@@ -300,7 +303,8 @@ ENV SERVER_NAME="Yamagi Quake II Server" \
     FLOOD_WAITDELAY=10 \
     LOG_LEVEL=1 \
     CHEATS=false \
-    SKILL_LEVEL=1
+    SKILL_LEVEL=1 \
+    HOME=/quake2
 
 # Labels for metadata
 LABEL org.opencontainers.image.title="Yamagi Quake II Dedicated Server" \
