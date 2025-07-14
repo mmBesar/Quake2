@@ -15,6 +15,9 @@ on:
     # Check for upstream updates every 6 hours
     - cron: '0 */6 * * *'
 
+permissions:
+  contents: write
+
 jobs:
   check-updates:
     runs-on: ubuntu-latest
@@ -32,6 +35,12 @@ jobs:
       run: |
         # Get the latest tag from upstream
         LATEST_TAG=$(git tag --sort=-version:refname | head -n1)
+        
+        # If no tag found, create a default one
+        if [[ -z "$LATEST_TAG" ]]; then
+          LATEST_TAG="linux-build-$(date +%Y%m%d)"
+        fi
+        
         echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
         
         # Check if this is a manual trigger
@@ -372,4 +381,3 @@ jobs:
         name: |
           quake2-linux-amd64-*
           quake2-linux-arm64-*
-        failOnError: false
