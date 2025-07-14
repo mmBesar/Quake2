@@ -104,16 +104,51 @@ jobs:
             zip \
             file
         
+        # Check the Makefile structure
+        echo "Checking Makefile targets..."
+        make help || echo "No help target available"
+        
+        # List some key directories
+        echo "Source structure:"
+        ls -la src/ || echo "No src directory"
+        
+        echo "Release directory (before build):"
+        ls -la release/ || echo "No release directory yet"
+        
         # Build with debug symbols, but ignore format-truncation warnings
         export CFLAGS="-g -O2 -Wno-format-truncation"
         export LDFLAGS="-g"
         
         # Clean and build
         make clean || true
-        make -j$(nproc) || {
-            echo "Build failed, checking for built files..."
+        
+        # Try building with more verbose output and continue on errors
+        echo "Starting build process..."
+        make -j$(nproc) -k || {
+            echo "Build failed, checking what was built..."
             find . -name "*.so" -o -name "quake2" -o -name "q2ded" | head -10
-            echo "Continuing with available files..."
+            
+            echo "Checking make output for errors..."
+            echo "Trying to build individual targets..."
+            
+            # Try building each target individually
+            echo "Building game library..."
+            make release/baseq2/game.so || echo "Game library build failed"
+            
+            echo "Building dedicated server..."
+            make release/q2ded || echo "Dedicated server build failed"
+            
+            echo "Building client..."
+            make release/quake2 || echo "Client build failed"
+            
+            echo "Building renderers..."
+            make release/ref_gl1.so || echo "GL1 renderer build failed"
+            make release/ref_gl3.so || echo "GL3 renderer build failed"
+            make release/ref_gles3.so || echo "GLES3 renderer build failed"
+            make release/ref_soft.so || echo "Software renderer build failed"
+            
+            echo "Final check of built files..."
+            find . -name "*.so" -o -name "quake2" -o -name "q2ded"
         }
         
         # Create output directory structure
