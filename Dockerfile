@@ -19,7 +19,7 @@ RUN apt-get update && \
 
 # Copy source code
 COPY . /src
-WORKDIR /src
+WORKDIR /src/src
 
 # Build the dedicated server
 RUN make -j$(nproc) BUILD=release ARCH=linux-${TARGETARCH} && \
@@ -44,8 +44,9 @@ RUN useradd -r -u 1000 -g 1000 -m -d /quake2 -s /bin/bash quake2 || \
     (groupadd -g 1000 quake2 && useradd -r -u 1000 -g 1000 -m -d /quake2 -s /bin/bash quake2)
 
 # Copy built binaries from builder stage
-COPY --from=builder /src/release/q2ded /usr/local/bin/q2ded
-COPY --from=builder /src/release/baseq2/game.so /quake2/baseq2/game.so
+COPY --from=builder /src/src/release/q2ded /usr/local/bin/q2ded
+COPY --from=builder /src/src/release/baseq2/game.so /quake2/baseq2/game.so
+COPY --from=builder /src/src/release/ref_*.so /usr/local/lib/
 
 # Create necessary directories with proper permissions
 RUN mkdir -p /quake2/baseq2/maps \
