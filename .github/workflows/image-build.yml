@@ -102,10 +102,17 @@ jobs:
     if: needs.check-changes.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout repository
+    - name: Checkout main for Dockerfile
       uses: actions/checkout@v4
       with:
         ref: main
+        path: main
+
+    - name: Checkout upstream for source
+      uses: actions/checkout@v4
+      with:
+        ref: upstream
+        path: upstream
 
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v3
@@ -139,10 +146,20 @@ jobs:
           org.opencontainers.image.revision=${{ github.sha }}
           org.opencontainers.image.version=${{ needs.check-changes.outputs.git_tag }}
 
+    - name: Prepare build context
+      run: |
+        # Copy Dockerfile from main branch
+        cp main/Dockerfile .
+        # Copy source from upstream
+        cp -r upstream/* .
+        # Ensure we have the Dockerfile in the build context
+        ls -la Dockerfile
+
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
       with:
         context: .
+        file: ./Dockerfile
         platforms: linux/amd64,linux/arm64
         push: true
         tags: ${{ steps.meta.outputs.tags }}
@@ -156,7 +173,7 @@ jobs:
       run: |
         mkdir -p examples
         
-        # Create docker-compose.yml
+        # Create docker-compose.yml with custom UID:GID support
         cat > examples/docker-compose.yml << 'EOF'
         version: '3.8'
         
@@ -167,7 +184,7 @@ jobs:
             restart: unless-stopped
             ports:
               - "27910:27910/udp"
-            user: "1000:1000"  # Run as specific UID:GID
+            user: "1000:1000"  # Custom UID:GID
             environment:
               # Server Configuration
               SERVER_NAME: "My Awesome Quake II Server"
@@ -225,26 +242,17 @@ jobs:
         volumes:
           quake2_logs:
           quake2_demos:
-        
-        # Optional: Add Grafana monitoring
-        # monitoring:
-        #   quake2-exporter:
-        #     image: quake2-prometheus-exporter:latest
-        #     ports:
-        #       - "9090:9090"
-        #     environment:
-        #       QUAKE2_SERVER: "quake2-server:27910"
         EOF
         
         # Create standalone run examples
         cat > examples/run-examples.sh << 'EOF'
         #!/bin/bash
         
-        # Basic server
+        # Basic server with custom user
         docker run -d \
           --name quake2-basic \
-          -p 27910:27910/udp \
           --user 1000:1000 \
+          -p 27910:27910/udp \
           -e SERVER_NAME="Basic Q2 Server" \
           -e MAX_PLAYERS=8 \
           ghcr.io/mmbesar/quake2:latest
@@ -252,8 +260,8 @@ jobs:
         # Advanced server with bots and custom settings
         docker run -d \
           --name quake2-advanced \
-          -p 27911:27910/udp \
           --user 1000:1000 \
+          -p 27911:27910/udp \
           -e SERVER_NAME="Advanced Q2 Server with Bots" \
           -e MAX_PLAYERS=16 \
           -e SERVER_PORT=27910 \
@@ -274,8 +282,8 @@ jobs:
         # CTF Server
         docker run -d \
           --name quake2-ctf \
-          -p 27912:27910/udp \
           --user 1000:1000 \
+          -p 27912:27910/udp \
           -e SERVER_NAME="CTF Server" \
           -e MAX_PLAYERS=20 \
           -e SERVER_PORT=27910 \
@@ -287,109 +295,9 @@ jobs:
           -e FRIENDLY_FIRE=false \
           -e FORCE_RESPAWN=true \
           ghcr.io/mmbesar/quake2:latest
-        
-        # Development/Testing server
-        docker run -d \
-          --name quake2-dev \
-          -p 27913:27910/udp \
-          --user 1000:1000 \
-          -e SERVER_NAME="Dev/Test Server" \
-          -e MAX_PLAYERS=4 \
-          -e SERVER_PORT=27910 \
-          -e CHEATS=true \
-          -e SKILL_LEVEL=0 \
-          -e PUBLIC_SERVER=false \
-          -e LOG_LEVEL=3 \
-          -e CUSTOM_CONFIG="set developer 1; set sv_cheats 1; set deathmatch 0; set coop 1" \
-          ghcr.io/mmbesar/quake2:latest
         EOF
         
         chmod +x examples/run-examples.sh
-        
-        # Create Kubernetes deployment example
-        cat > examples/kubernetes.yml << 'EOF'
-        apiVersion: apps/v1
-        kind: Deployment
-        metadata:
-          name: quake2-server
-          labels:
-            app: quake2-server
-        spec:
-          replicas: 1
-          selector:
-            matchLabels:
-              app: quake2-server
-          template:
-            metadata:
-              labels:
-                app: quake2-server
-            spec:
-              securityContext:
-                runAsUser: 1000
-                runAsGroup: 1000
-                fsGroup: 1000
-              containers:
-              - name: quake2-server
-                image: ghcr.io/mmbesar/quake2:latest
-                ports:
-                - containerPort: 27910
-                  protocol: UDP
-                env:
-                - name: SERVER_NAME
-                  value: "Kubernetes Q2 Server"
-                - name: MAX_PLAYERS
-                  value: "16"
-                - name: ENABLE_BOTS
-                  value: "true"
-                - name: BOT_COUNT
-                  value: "4"
-                resources:
-                  requests:
-                    memory: "64Mi"
-                    cpu: "100m"
-                  limits:
-                    memory: "256Mi"
-                    cpu: "500m"
-                livenessProbe:
-                  exec:
-                    command:
-                    - /bin/sh
-                    - -c
-                    - "ss -ulpn | grep :27910"
-                  initialDelaySeconds: 30
-                  periodSeconds: 30
-                readinessProbe:
-                  exec:
-                    command:
-                    - /bin/sh
-                    - -c
-                    - "ss -ulpn | grep :27910"
-                  initialDelaySeconds: 10
-                  periodSeconds: 10
-                volumeMounts:
-                - name: logs
-                  mountPath: /quake2/logs
-                - name: demos
-                  mountPath: /quake2/demos
-              volumes:
-              - name: logs
-                emptyDir: {}
-              - name: demos
-                emptyDir: {}
-        ---
-        apiVersion: v1
-        kind: Service
-        metadata:
-          name: quake2-server-service
-        spec:
-          selector:
-            app: quake2-server
-          ports:
-          - protocol: UDP
-            port: 27910
-            targetPort: 27910
-          type: LoadBalancer
-        EOF
         
         # Create environment variables documentation
         cat > examples/ENV_VARIABLES.md << 'EOF'
@@ -423,119 +331,80 @@ jobs:
         - `FRIENDLY_FIRE` - Enable friendly fire (default: false)
         - `WEAPONS_STAY` - Weapons stay after pickup (default: false)
         - `INSTANT_ITEMS` - Instant item pickup (default: false)
-        - `QUAD_DROP` - Drop quad damage on death (default: false)
-        - `QUAD_FIRE_DROP` - Drop quad damage on fire death (default: false)
-        - `FORCE_RESPAWN` - Force immediate respawn (default: false)
+        - `QUAD_DROP` - Drop quad on death (default: false)
+        - `QUAD_FIRE_DROP` - Drop quad on fire death (default: false)
+        - `FORCE_RESPAWN` - Force player respawn (default: false)
         - `TEAM_PLAY` - Enable team play (default: false)
         - `CTFGAME` - Enable CTF game mode (default: false)
         
-        ## Server Features
-        - `ALLOW_DOWNLOAD` - Allow client downloads (default: true)
-        - `CHEATS` - Enable cheats (default: false)
+        ## Advanced Settings
+        - `FLOOD_MSGS` - Max messages before flood protection (default: 4)
+        - `FLOOD_PERSECOND` - Max messages per second (default: 4)
+        - `FLOOD_WAITDELAY` - Flood protection delay (default: 10)
         - `LOG_LEVEL` - Logging level 0-3 (default: 1)
-        
-        ## Flood Protection
-        - `FLOOD_MSGS` - Number of messages before flood protection (default: 4)
-        - `FLOOD_PERSECOND` - Messages per second limit (default: 4)
-        - `FLOOD_WAITDELAY` - Delay after flood detection (default: 10)
-        
-        ## Advanced
-        - `CUSTOM_CONFIG` - Custom server configuration commands (default: "")
+        - `CHEATS` - Enable cheats (default: false)
+        - `ALLOW_DOWNLOAD` - Allow file downloads (default: true)
+        - `CUSTOM_CONFIG` - Custom Quake II config commands (default: "")
         
         ## Usage Examples
         
         ### Basic Server
         ```bash
-        docker run -d \
-          --name quake2-server \
-          -p 27910:27910/udp \
-          --user 1000:1000 \
+        docker run -d --user 1000:1000 -p 27910:27910/udp \
           -e SERVER_NAME="My Server" \
-          -e MAX_PLAYERS=16 \
+          -e MAX_PLAYERS=12 \
           ghcr.io/mmbesar/quake2:latest
         ```
         
-        ### Bot Server
+        ### Advanced Configuration
         ```bash
-        docker run -d \
-          --name quake2-bots \
-          -p 27910:27910/udp \
-          --user 1000:1000 \
-          -e SERVER_NAME="Bot Practice Server" \
+        docker run -d --user 1000:1000 -p 27910:27910/udp \
+          -e SERVER_NAME="Advanced Server" \
+          -e MAX_PLAYERS=16 \
+          -e MAP_ROTATION="q2dm1,q2dm2,q2dm3" \
+          -e TIME_LIMIT=15 \
+          -e FRAG_LIMIT=30 \
           -e ENABLE_BOTS=true \
-          -e BOT_COUNT=8 \
-          -e MAX_PLAYERS=16 \
-          ghcr.io/mmbesar/quake2:latest
-        ```
-        
-        ### CTF Server
-        ```bash
-        docker run -d \
-          --name quake2-ctf \
-          -p 27910:27910/udp \
-          --user 1000:1000 \
-          -e SERVER_NAME="CTF Server" \
-          -e CTFGAME=true \
-          -e TEAM_PLAY=true \
-          -e MAP_ROTATION="q2ctf1,q2ctf2,q2ctf3,q2ctf4,q2ctf5" \
-          -e TIME_LIMIT=20 \
+          -e BOT_COUNT=4 \
+          -e WEAPONS_STAY=true \
+          -e ADMIN_PASSWORD="secret" \
+          -e RCON_PASSWORD="rconsecret" \
           ghcr.io/mmbesar/quake2:latest
         ```
         EOF
 
-    - name: Create Release
-      if: github.event_name == 'push' && github.ref == 'refs/heads/upstream'
+    - name: Create GitHub Release
+      if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
       uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag_name: ${{ needs.check-changes.outputs.git_tag }}
-        release_name: "Quake II Server ${{ needs.check-changes.outputs.git_tag }}"
+        release_name: Quake II Server ${{ needs.check-changes.outputs.git_tag }}
         body: |
           ## Yamagi Quake II Dedicated Server Container
           
-          ### Features
-          - Multi-architecture support (amd64, arm64)
-          - Full configuration control via environment variables
-          - Built-in bot support
-          - Map rotation system
-          - Security features (passwords, flood protection)
-          - Health checks and monitoring ready
+          Multi-architecture container image for Yamagi Quake II dedicated server.
+          
+          ### Usage
+          ```bash
+          docker pull ghcr.io/mmbesar/quake2:latest
+          ```
+          
+          ### Supported Architectures
+          - linux/amd64
+          - linux/arm64
           
           ### Quick Start
           ```bash
-          docker pull ghcr.io/mmbesar/quake2:latest
-          docker run -d --name quake2-server -p 27910:27910/udp --user 1000:1000 ghcr.io/mmbesar/quake2:latest
+          docker run -d --user 1000:1000 -p 27910:27910/udp \
+            -e SERVER_NAME="My Q2 Server" \
+            ghcr.io/mmbesar/quake2:latest
           ```
           
-          ### Configuration
-          See the examples directory for docker-compose.yml, Kubernetes deployment, and environment variable documentation.
-          
-          ### Image Details
-          - **Tag**: `${{ needs.check-changes.outputs.git_tag }}`
-          - **Architectures**: linux/amd64, linux/arm64
-          - **Registry**: ghcr.io/mmbesar/quake2
-          - **Size**: Optimized multi-stage build
-          
-          ### Security
-          - Runs as non-root user (configurable UID:GID)
-          - Minimal attack surface
-          - No unnecessary packages in runtime image
+          See the examples directory for more configuration options.
         draft: false
         prerelease: false
 
-    - name: Update Repository Topics
-      run: |
-        gh api --method PUT /repos/${{ github.repository }}/topics \
-          --field names='["quake2","game-server","docker","containerization","yamagi","dedicated-server","multi-arch","gaming"]' \
-          --header "Authorization: token ${{ secrets.GITHUB_TOKEN }}"
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Post-build notification
-      run: |
-        echo "✅ Successfully built and pushed container images:"
-        echo "📦 ghcr.io/mmbesar/quake2:latest"
-        echo "📦 ghcr.io/mmbesar/quake2:${{ needs.check-changes.outputs.git_tag }}"
-        echo "🏗️ Architectures: linux/amd64, linux/arm64"
-        echo "🎮 Ready to deploy your Quake II server!"
+    - name: Image digest
+      run: echo "Image built and pushed successfully!"
