@@ -22,8 +22,10 @@ COPY . /src
 WORKDIR /src
 
 # Build the dedicated server
-RUN make -j$(nproc) BUILD=release ARCH=linux-${TARGETARCH} && \
-    strip release/q2ded release/baseq2/game.so release/ref_*.so || true
+RUN make clean && \
+    make -j$(nproc) release/q2ded && \
+    make -j$(nproc) release/baseq2/game.so && \
+    strip release/q2ded release/baseq2/game.so
 
 # Runtime stage
 FROM ubuntu:22.04 AS runtime
@@ -39,16 +41,11 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
-# Create non-root user for security (can be overridden with --user)
-RUN useradd -r -u 1000 -g 1000 -m -d /quake2 -s /bin/bash quake2 || \
-    (groupadd -g 1000 quake2 && useradd -r -u 1000 -g 1000 -m -d /quake2 -s /bin/bash quake2)
-
 # Copy built binaries from builder stage
 COPY --from=builder /src/release/q2ded /usr/local/bin/q2ded
-COPY --from=builder /src/release/baseq2/game.so /quake2/baseq2/game.so
-COPY --from=builder /src/release/ref_*.so /usr/local/lib/
+COPY --from=builder /src/release/baseq2/game.so /usr/local/lib/baseq2/game.so
 
-# Create necessary directories with proper permissions
+# Create directory structure that works with any UID:GID
 RUN mkdir -p /quake2/baseq2/maps \
     /quake2/baseq2/models \
     /quake2/baseq2/sounds \
@@ -56,24 +53,21 @@ RUN mkdir -p /quake2/baseq2/maps \
     /quake2/baseq2/textures \
     /quake2/logs \
     /quake2/demos \
-    /quake2/config && \
-    chmod -R 755 /quake2 && \
-    chmod +x /usr/local/bin/q2ded
+    /quake2/config \
+    && chmod -R 755 /quake2 \
+    && chmod -R 777 /quake2/logs /quake2/demos /quake2/config
+
+# Copy game.so to the quake2 directory structure
+RUN cp /usr/local/lib/baseq2/game.so /quake2/baseq2/game.so
 
 # Copy startup script
 COPY <<EOF /usr/local/bin/start-server.sh
 #!/bin/bash
 set -e
 
-# Ensure directories exist and are writable by current user
-mkdir -p /quake2/baseq2/maps \
-    /quake2/baseq2/models \
-    /quake2/baseq2/sounds \
-    /quake2/baseq2/pics \
-    /quake2/baseq2/textures \
-    /quake2/logs \
-    /quake2/demos \
-    /quake2/config
+# Ensure writable directories exist and are writable by current user
+mkdir -p /quake2/logs /quake2/demos /quake2/config
+chmod 755 /quake2/logs /quake2/demos /quake2/config
 
 # Configuration with environment variables
 SERVER_NAME=\${SERVER_NAME:-"Yamagi Quake II Server"}
@@ -258,6 +252,7 @@ if [ "\$ENABLE_BOTS" = "true" ]; then
 fi
 echo "Public Server: \$PUBLIC_SERVER"
 echo "Allow Downloads: \$ALLOW_DOWNLOAD"
+echo "Running as UID:GID: \$(id -u):\$(id -g)"
 echo "================================================"
 
 # Start the server
@@ -267,13 +262,7 @@ EOF
 # Make the startup script executable
 RUN chmod +x /usr/local/bin/start-server.sh
 
-# Install Python for dmflags calculation
-RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y python3 && \
-    rm -rf /var/lib/apt/lists/*
-
-# Switch to non-root user
-USER quake2
+# Set working directory
 WORKDIR /quake2
 
 # Expose default Quake II port
