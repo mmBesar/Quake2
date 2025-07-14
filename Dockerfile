@@ -37,17 +37,19 @@ RUN apt-get update && \
     libopenal1 \
     libcurl4 \
     ca-certificates \
+    python3 \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
-# Create non-root user for security
-RUN useradd -r -u 1000 -m -d /quake2 -s /bin/bash quake2
+# Create non-root user for security (can be overridden with --user)
+RUN useradd -r -u 1000 -g 1000 -m -d /quake2 -s /bin/bash quake2 || \
+    (groupadd -g 1000 quake2 && useradd -r -u 1000 -g 1000 -m -d /quake2 -s /bin/bash quake2)
 
 # Copy built binaries from builder stage
 COPY --from=builder /src/release/q2ded /usr/local/bin/q2ded
 COPY --from=builder /src/release/baseq2/game.so /quake2/baseq2/game.so
 
-# Create necessary directories
+# Create necessary directories with proper permissions
 RUN mkdir -p /quake2/baseq2/maps \
     /quake2/baseq2/models \
     /quake2/baseq2/sounds \
@@ -55,12 +57,24 @@ RUN mkdir -p /quake2/baseq2/maps \
     /quake2/baseq2/textures \
     /quake2/logs \
     /quake2/demos \
-    /quake2/config
+    /quake2/config && \
+    chmod -R 755 /quake2 && \
+    chmod +x /usr/local/bin/q2ded
 
 # Copy startup script
 COPY <<EOF /usr/local/bin/start-server.sh
 #!/bin/bash
 set -e
+
+# Ensure directories exist and are writable by current user
+mkdir -p /quake2/baseq2/maps \
+    /quake2/baseq2/models \
+    /quake2/baseq2/sounds \
+    /quake2/baseq2/pics \
+    /quake2/baseq2/textures \
+    /quake2/logs \
+    /quake2/demos \
+    /quake2/config
 
 # Configuration with environment variables
 SERVER_NAME=\${SERVER_NAME:-"Yamagi Quake II Server"}
@@ -94,9 +108,6 @@ LOG_LEVEL=\${LOG_LEVEL:-1}
 CHEATS=\${CHEATS:-false}
 SKILL_LEVEL=\${SKILL_LEVEL:-1}
 CUSTOM_CONFIG=\${CUSTOM_CONFIG:-""}
-
-# Create server config directory
-mkdir -p /quake2/config
 
 # Generate server configuration
 cat > /quake2/config/server.cfg << EOL
