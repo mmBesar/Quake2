@@ -22,8 +22,8 @@ on:
       - 'Dockerfile'
       - '.github/workflows/image-build.yml'
   schedule:
-    # Check for upstream updates every 12 hours
-    - cron: '0 */12 * * *'
+    # Check for upstream updates every day
+    - cron: '0 4 * * *'
 
 permissions:
   contents: read
