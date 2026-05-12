@@ -12,8 +12,8 @@ on:
     branches:
       - upstream
   schedule:
-    # Check for upstream updates every 6 hours
-    - cron: '0 */6 * * *'
+    # Check for upstream updates every day
+    - cron: '0 2 * * *'
 
 permissions:
   contents: write
