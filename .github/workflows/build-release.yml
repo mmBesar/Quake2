@@ -109,9 +109,10 @@ jobs:
         apt-get install -y \
             build-essential \
             libgl1-mesa-dev \
-            libsdl2-dev \
+            libsdl3-dev \
             libopenal-dev \
             libcurl4-openssl-dev \
+            pkgconf \
             zip \
             file
         
@@ -243,7 +244,7 @@ jobs:
           -v $(pwd):/src \
           -v $(pwd)/output:/output \
           -w /src \
-          ubuntu:22.04 \
+          ubuntu:24.04 \
           bash -c "./build.sh ${{ matrix.arch }} ${{ needs.check-updates.outputs.latest_tag }}"
 
     - name: Upload build artifacts
