@@ -1,5 +1,5 @@
 # Multi-stage build for Yamagi Quake II Dedicated Server
-FROM ubuntu:22.04 AS builder
+FROM ubuntu:24.04 AS builder
 
 # Build arguments
 ARG TARGETARCH
@@ -11,10 +11,11 @@ RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
     build-essential \
     libgl1-mesa-dev \
-    libsdl2-dev \
+    libsdl3-dev \
     libopenal-dev \
     libcurl4-openssl-dev \
     git \
+    pkgconf \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy source code
@@ -29,7 +30,7 @@ RUN make clean && \
     strip release/q2ded release/baseq2/game.so
 
 # Runtime stage
-FROM ubuntu:22.04 AS runtime
+FROM ubuntu:24.04 AS runtime
 
 # Install runtime dependencies only
 RUN apt-get update && \
