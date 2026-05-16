@@ -109,7 +109,7 @@ jobs:
         apt-get install -y \
             build-essential \
             libgl1-mesa-dev \
-            libsdl2-dev \
+            libsdl3-dev \
             libopenal-dev \
             libcurl4-openssl-dev \
             zip \
@@ -331,7 +331,7 @@ jobs:
         2. Extract the contents to your desired location
         3. Make sure you have the required dependencies installed:
            - OpenGL drivers
-           - SDL2 (\`libsdl2-2.0-0\`)
+           - SDL3 (\`libsdl3\`)
            - OpenAL (\`libopenal1\`)
            - libcurl (\`libcurl4\`)
         
