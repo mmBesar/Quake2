@@ -11,7 +11,7 @@ RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
     build-essential \
     libgl1-mesa-dev \
-    libsdl2-dev \
+    libsdl3-dev \
     libopenal-dev \
     libcurl4-openssl-dev \
     git \
@@ -34,7 +34,7 @@ FROM ubuntu:24.04 AS runtime
 # Install runtime dependencies only
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    libsdl2-2.0-0 \
+    libsdl3-0 \
     libopenal1 \
     libcurl4 \
     ca-certificates \
