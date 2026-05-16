@@ -1,5 +1,5 @@
 # Multi-stage build for Yamagi Quake II Dedicated Server
-FROM ubuntu:24.04 AS builder
+FROM ubuntu:latest AS builder
 
 # Build arguments
 ARG TARGETARCH
@@ -29,7 +29,7 @@ RUN make clean && \
     strip release/q2ded release/baseq2/game.so
 
 # Runtime stage
-FROM ubuntu:24.04 AS runtime
+FROM ubuntu:latest AS runtime
 
 # Install runtime dependencies only
 RUN apt-get update && \
