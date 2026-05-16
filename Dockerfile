@@ -11,11 +11,10 @@ RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
     build-essential \
     libgl1-mesa-dev \
-    libsdl3-dev \
+    libsdl2-dev \
     libopenal-dev \
     libcurl4-openssl-dev \
     git \
-    pkgconf \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy source code
